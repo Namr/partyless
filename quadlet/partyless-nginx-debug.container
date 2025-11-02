@@ -1,0 +1,17 @@
+[Unit]
+Description=Partyless nginx reverse proxy (debug backend)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/partyless-nginx:latest
+ContainerName=partyless-nginx-debug
+PublishPort=80:80
+Environment=NGINX_UPSTREAM_HOST=host.containers.internal
+Environment=NGINX_UPSTREAM_PORT=3000
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
