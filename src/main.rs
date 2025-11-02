@@ -1,20 +1,49 @@
-use axum::{Router, routing::get};
+use axum::{Form, Router, extract::Query, routing::get};
+use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, signal};
-use tracing::debug;
+use tower_http::trace::TraceLayer;
+use tracing::{debug, info};
+use tracing_subscriber::EnvFilter;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EventCreationForm {
+    event_name: String,
+    hosts_name: String,
+    address: String,
+    description: String,
+    date: String,
+    time: String,
+    timezone: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EventViewQuery {
+    uuid: String,
+}
 
 #[tokio::main]
 async fn main() {
-    println!("Hello, world!");
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .or_else(|_| EnvFilter::try_new("tower_http=warn"))
+                .unwrap(),
+        )
+        .init();
+
+    info!("hi");
 
     let app = Router::new()
-        .route("/foo", get(get_foo).post(post_foo))
-        .route("/foo/bar", get(foo_bar));
+        .route("/event", get(get_event).post(post_event))
+        .layer(TraceLayer::new_for_http());
 
-    let listener = TcpListener::bind("127.0.0.1:3000")
+    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    debug!("listening on {}", listener.local_addr().unwrap());
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
-    debug!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await.unwrap();
 }
 
 async fn shutdown_signal() {
@@ -37,6 +66,10 @@ async fn shutdown_signal() {
     }
 }
 
-async fn get_foo() {}
-async fn post_foo() {}
-async fn foo_bar() {}
+async fn get_event(Query(params): Query<EventViewQuery>) {
+    info!("{params:?}");
+}
+
+async fn post_event(Form(event): Form<EventCreationForm>) {
+    info!("got event {event:?}");
+}
