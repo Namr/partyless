@@ -5,6 +5,7 @@ FROM docker.io/library/rust:1.91-bullseye AS builder
 WORKDIR /app
 
 # cache deps
+RUN apt install libsqlite3-dev
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo "// dummy file for cargo fetch" > src/main.rs
 RUN cargo fetch

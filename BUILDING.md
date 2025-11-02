@@ -8,7 +8,17 @@ for the Axum server.
 
 ## Local Build
 
-The Rust backend has no system dependencies, simply build with 
+The Rust backend depends on the sqlite3 development libraries. How you install these depends on your distro
+e.g Fedora:
+```
+sudo dnf install sqlite sqlite-devel
+```
+or on Debian/Ubuntu:
+```
+sudo apt install libsqlite3-dev
+```
+
+Then build the server with 
 ```
 cargo build
 ```
