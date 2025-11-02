@@ -7,8 +7,10 @@ Wants=network-online.target
 Image=localhost/partyless-nginx:latest
 ContainerName=partyless-nginx-debug
 PublishPort=80:80
+PublishPort=443:443
 Environment=NGINX_UPSTREAM_HOST=host.containers.internal
 Environment=NGINX_UPSTREAM_PORT=3000
+Volume=/home/amoussa/repos/partyless/static:/usr/share/nginx/html:Z
 
 [Service]
 Restart=on-failure
