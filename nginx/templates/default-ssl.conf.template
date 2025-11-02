@@ -1,0 +1,44 @@
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name _;
+
+    root ${NGINX_STATIC_ROOT};
+    index index.html;
+
+    ssl_certificate /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
+    ssl_session_timeout 10m;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location / {
+        try_files $uri $uri/ @rust_backend;
+    }
+
+    location @rust_backend {
+        proxy_pass http://${NGINX_UPSTREAM_HOST}:${NGINX_UPSTREAM_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+
+    location /assets/ {
+        alias ${NGINX_STATIC_ROOT}/assets/;
+        expires 1h;
+        add_header Cache-Control "public";
+    }
+}

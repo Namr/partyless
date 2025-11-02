@@ -1,0 +1,13 @@
+[Unit]
+Description=Partyless nginx reverse proxy container
+
+[Container]
+Image=localhost/partyless-nginx:latest
+ContainerName=partyless-nginx
+Pod=partyless.pod
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

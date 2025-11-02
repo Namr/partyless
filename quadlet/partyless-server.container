@@ -1,0 +1,13 @@
+[Unit]
+Description=Partyless backend service container
+
+[Container]
+Image=localhost/partyless-server:latest
+ContainerName=partyless-server
+Pod=partyless.pod
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
