@@ -11,6 +11,7 @@ use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EventCreationForm {
@@ -21,10 +22,12 @@ struct EventCreationForm {
     date: String,
     time: String,
     timezone: String,
+    password: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct Event {
+    uuid: Uuid,
     event_name: String,
     host_name: String,
     address: String,
@@ -56,11 +59,12 @@ impl TryFrom<EventCreationForm> for Event {
             .single()
             .ok_or(anyhow!("time + timezone was ambigious"))?;
         Ok(Event {
+            uuid: Uuid::new_v4(),
             event_name: value.event_name,
             host_name: value.hosts_name,
             address: value.address,
             description: value.description,
-            password: None,
+            password: value.password,
             time,
         })
     }
@@ -115,6 +119,7 @@ async fn init_db_schema() -> Result<()> {
         db.execute(
             "CREATE TABLE events (
             id    INTEGER PRIMARY KEY,
+            uuid BLOB NOT NULL,
             event_name  TEXT NOT NULL,
             host_name TEXT NOT NULL,
             address TEXT NOT NULL,

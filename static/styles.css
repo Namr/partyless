@@ -1,0 +1,231 @@
+:root{
+  --green: #12823b;         /* main */
+  --green-ink: #0b5a29;     /* darker lines */
+  --mint: #a8f0c6;          /* accent */
+  --beige: #f3e9d2;         /* accent */
+  --ink: #111111;           /* brutalist outlines */
+  --paper: #ffffff;
+}
+
+/* Base */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body{
+  margin: 0;
+  background: var(--beige);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+  font-weight: 700; /* chunky */
+  letter-spacing: 0.2px;
+}
+
+/* Layout shell: fills the viewport and avoids desktop scrolling */
+.shell{
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 16px;
+  padding: clamp(12px, 1.8vw, 18px);
+}
+
+/* Neo-brutalist header */
+header{
+  background: var(--mint);
+  color: var(--ink);
+  border: 4px solid var(--ink);
+  box-shadow: 8px 8px 0 0 var(--ink);
+  padding: clamp(10px, 1.8vw, 16px);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+.brand{
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.brand h1{
+  margin: 0;
+  font-size: clamp(24px, 3.5vw, 40px);
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.tag{
+  font-size: clamp(12px, 1.5vw, 16px);
+  padding: 6px 10px;
+  background: var(--mint);
+  color: var(--ink);
+  border: 3px solid var(--ink);
+  box-shadow: 4px 4px 0 0 var(--ink);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+a{
+  color: var(--ink);
+  text-decoration-color: var(--ink);
+}
+a:hover,
+a:focus{
+  color: var(--paper);
+  background: var(--green-ink);
+  text-decoration-color: transparent;
+  outline: none;
+  transition: background 120ms ease;
+}
+
+/* Content row: card centered; no desktop scroll */
+main{
+  display: grid;
+  place-items: center;
+}
+
+.card{
+  width: min(100%, 980px);
+  background: var(--paper);
+  border: 4px solid var(--ink);
+  box-shadow: 10px 10px 0 0 var(--ink);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* Left panel: loud title + bullets */
+.card-aside{
+  background: var(--mint);
+  border-right: 4px solid var(--ink);
+  padding: clamp(14px, 2vw, 22px);
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+.card-aside h2{
+  margin: 0 0 6px 0;
+  font-size: clamp(18px, 2.4vw, 26px);
+  text-transform: uppercase;
+}
+.bullets{
+  display: grid;
+  gap: 10px;
+}
+.pill{
+  background: var(--beige);
+  border: 3px solid var(--ink);
+  padding: 8px 10px;
+  box-shadow: 4px 4px 0 0 var(--ink);
+  font-size: clamp(12px, 1.4vw, 14px);
+}
+
+/* Form side */
+form{
+  padding: clamp(14px, 2vw, 22px);
+  display: grid;
+  gap: 12px;
+}
+
+.group{
+  display: grid;
+  gap: 6px;
+}
+label{
+  text-transform: uppercase;
+  font-size: 12px;
+}
+input.form-control, textarea.form-control, select.form-select{
+  border: 3px solid var(--ink) !important;
+  border-radius: 0 !important;
+  background: #fff !important;
+  color: var(--ink) !important;
+  box-shadow: 4px 4px 0 0 var(--ink);
+  padding: 10px 12px;
+  font-weight: 700;
+}
+input::placeholder, textarea::placeholder{ color:#666; font-weight:600; }
+
+.row-lite{
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+.btn-primary{
+  --btn-bg: var(--mint);
+  --btn-ink: var(--ink);
+  background: var(--btn-bg) !important;
+  color: var(--btn-ink) !important;
+  border: 3px solid var(--ink) !important;
+  border-radius: 0 !important;
+  padding: 12px 18px !important;
+  width: 100%;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  box-shadow: 6px 6px 0 0 var(--ink);
+}
+.btn-primary:active{
+  transform: translate(2px,2px);
+  box-shadow: 4px 4px 0 0 var(--ink);
+}
+.btn-primary:hover{
+  background: var(--beige) !important;
+}
+
+/* Desktop: force no scrolling by constraining height */
+@media (min-width: 992px){
+  html, body{ overflow: hidden; } /* no desktop scroll */
+  main{
+    /* Ensure card stays within viewport minus header & gaps */
+    min-height: 0; /* allow grid to size properly */
+  }
+  .card{
+    height: calc(100vh - (clamp(10px, 1.8vw, 16px) * 2 + clamp(24px, 3.5vw, 40px)) - 48px);
+    /* The above keeps card within viewport; tuned for header size & grid gap */
+    max-height: 620px; /* safety cap on huge screens */
+  }
+  form{
+    overflow: hidden; /* prevent accidental scrollbars */
+  }
+}
+
+/* Tablets & phones */
+@media (max-width: 991.98px){
+  html, body{ overflow: auto; } /* allow mobile scrolling */
+  .shell{
+    padding: clamp(18px, 6vw, 32px); /* breathe more on mobile */
+  }
+  header{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    max-width: 640px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .brand{
+    flex: 1 1 auto;
+  }
+  .tag{
+    margin-left: auto;
+    white-space: nowrap;
+  }
+  .card{
+    grid-template-columns: 1fr;
+    max-width: 640px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .card-aside{
+    display: none; /* hide the marketing aside on mobile to focus on the form */
+  }
+  .row-lite{
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Very small phones */
+@media (max-width: 420px){
+  .tag{ display: none; }
+}

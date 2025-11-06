@@ -16,3 +16,4 @@ tower-http = { version = "0.6.6", features = ["trace"] }
 tracing = { version = "0.1.41", features = ["async-await"] }
 tracing-futures = "0.2.5"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+uuid = { version = "1.18.1", features = ["v4"] }
