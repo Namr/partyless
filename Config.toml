@@ -1,0 +1,2 @@
+bcrypt_cost = 18
+bcrypt_salt = "dontusethisinprod!"

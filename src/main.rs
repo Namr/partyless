@@ -1,10 +1,15 @@
-use std::sync::Arc;
+use std::{fs::read_to_string, sync::Arc};
 
 use anyhow::{Result, anyhow};
-use axum::{Form, Router, extract::Query, routing::get};
+use axum::{
+    Form, Router,
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode},
+    routing::get,
+};
 use chrono::{DateTime, NaiveDateTime, TimeZone};
 use chrono_tz::Tz;
-use lazy_static::lazy_static;
+use clap::Parser;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, signal, sync::Mutex};
@@ -12,6 +17,30 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Path to Configuration TOML file
+    #[arg(short, long, default_value = "Config.toml")]
+    config_file: String,
+
+    /// Path to SQLite DB file
+    #[arg(short, long, default_value = "partyless.db")]
+    db_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Config {
+    bcrypt_cost: u32,
+    bcrypt_salt: String,
+}
+
+#[derive(Clone)]
+struct RouteState {
+    config: Config,
+    db: Arc<Mutex<Connection>>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EventCreationForm {
@@ -70,18 +99,41 @@ impl TryFrom<EventCreationForm> for Event {
     }
 }
 
+impl Event {
+    async fn commit(&self, db_conn: &Mutex<Connection>) -> Result<()> {
+        let db = db_conn.lock().await;
+        let mut stmt = db.prepare_cached(
+            "INSERT into events (
+                uuid, 
+                event_name, 
+                host_name, 
+                address, 
+                description, 
+                time, 
+                password
+                ) 
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?;
+        stmt.execute((
+            &self.uuid.to_bytes_le(),
+            &self.event_name,
+            &self.host_name,
+            &self.address,
+            &self.description,
+            &self.time.to_rfc3339(),
+            &self.password,
+        ))?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EventViewQuery {
     uuid: String,
 }
 
-lazy_static! {
-    static ref DB: Arc<Mutex<Connection>> =
-        Arc::new(Mutex::new(Connection::open("partyless.db").unwrap()));
-}
-
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -90,11 +142,17 @@ async fn main() {
         )
         .init();
 
-    init_db_schema().await.unwrap();
+    let args = Args::parse();
+    let config: Config = toml::from_str(&read_to_string(args.config_file)?)?;
+    let db = Arc::new(Mutex::new(Connection::open(args.db_file)?));
+    let mut route_state = RouteState { config, db };
+
+    init_db_schema(&mut route_state).await.unwrap();
 
     let app = Router::new()
         .route("/event", get(get_event).post(post_event))
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .with_state(route_state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     info!("server started on {}", listener.local_addr().unwrap());
@@ -103,13 +161,15 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+
+    Ok(())
 }
 
 /*
  * Checks the existance of each table in the DB, and if it does not exist, creates it
  */
-async fn init_db_schema() -> Result<()> {
-    let db = DB.lock().await;
+async fn init_db_schema(route_state: &mut RouteState) -> Result<()> {
+    let db = route_state.db.lock().await;
     if let Err(rusqlite::Error::QueryReturnedNoRows) = db.query_one(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='events'",
         (),
@@ -123,6 +183,7 @@ async fn init_db_schema() -> Result<()> {
             event_name  TEXT NOT NULL,
             host_name TEXT NOT NULL,
             address TEXT NOT NULL,
+            description TEXT NOT NULL,
             time TEXT NOT NULL,
             password TEXT
         )",
@@ -157,11 +218,28 @@ async fn get_event(Query(params): Query<EventViewQuery>) {
     info!("{params:?}");
 }
 
-async fn post_event(Form(event_payload): Form<EventCreationForm>) {
+async fn post_event(
+    State(route_state): State<RouteState>,
+    Form(event_payload): Form<EventCreationForm>,
+) -> (HeaderMap, StatusCode) {
+    let mut headers = HeaderMap::new();
     match Event::try_from(event_payload) {
         Ok(event) => {
-            info!("got event {event:?}");
+            debug!("got event {event:?}");
+            if let Err(err) = event.commit(&route_state.db).await {
+                error!("failed POST /event due sql error: {err:#}");
+                return (headers, StatusCode::BAD_REQUEST);
+            }
+            let link = format!("/view?={}", event.uuid);
+            match link.parse() {
+                Err(_) => return (headers, StatusCode::INTERNAL_SERVER_ERROR),
+                Ok(link_header) => headers.insert("HX-Location", link_header),
+            };
+            (headers, StatusCode::OK)
         }
-        Err(err) => error!("failed POST /event due to parsing error: {err:#}"),
+        Err(err) => {
+            error!("failed to parse event payload; err: {err:#}");
+            (headers, StatusCode::BAD_REQUEST)
+        }
     }
 }
