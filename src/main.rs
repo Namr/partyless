@@ -33,7 +33,7 @@ struct Args {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Config {
     bcrypt_cost: u32,
-    bcrypt_salt: String,
+    bcrypt_salt: [u8; 16],
 }
 
 #[derive(Clone)]
@@ -65,10 +65,8 @@ struct Event {
     time: DateTime<Tz>,
 }
 
-impl TryFrom<EventCreationForm> for Event {
-    type Error = anyhow::Error;
-
-    fn try_from(value: EventCreationForm) -> Result<Self> {
+impl Event {
+    fn from_event_creation_form(value: EventCreationForm, config: &Config) -> Result<Self> {
         if value.event_name.is_empty()
             || value.hosts_name.is_empty()
             || value.address.is_empty()
@@ -87,22 +85,33 @@ impl TryFrom<EventCreationForm> for Event {
             .from_local_datetime(&naive_time)
             .single()
             .ok_or(anyhow!("time + timezone was ambigious"))?;
+
+        let password = if let Some(password) = value.password {
+            if password.len() >= 72 || password.is_empty() {
+                None
+            } else {
+                Some(
+                    bcrypt::hash_with_salt(password, config.bcrypt_cost, config.bcrypt_salt)?
+                        .format_for_version(bcrypt::Version::TwoB),
+                )
+            }
+        } else {
+            None
+        };
+
         Ok(Event {
             uuid: Uuid::new_v4(),
             event_name: value.event_name,
             host_name: value.hosts_name,
             address: value.address,
             description: value.description,
-            password: value.password,
+            password,
             time,
         })
     }
-}
 
-impl Event {
-    async fn commit(&self, db_conn: &Mutex<Connection>) -> Result<()> {
-        let db = db_conn.lock().await;
-        let mut stmt = db.prepare_cached(
+    fn commit(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare_cached(
             "INSERT into events (
                 uuid, 
                 event_name, 
@@ -124,6 +133,10 @@ impl Event {
             &self.password,
         ))?;
         Ok(())
+    }
+
+    fn load_from_uuid(uuid: Uuid) -> Option<Self> {
+        None
     }
 }
 
@@ -185,7 +198,7 @@ async fn init_db_schema(route_state: &mut RouteState) -> Result<()> {
             address TEXT NOT NULL,
             description TEXT NOT NULL,
             time TEXT NOT NULL,
-            password TEXT
+            password BLOB
         )",
             (),
         )?;
@@ -223,14 +236,17 @@ async fn post_event(
     Form(event_payload): Form<EventCreationForm>,
 ) -> (HeaderMap, StatusCode) {
     let mut headers = HeaderMap::new();
-    match Event::try_from(event_payload) {
+    match Event::from_event_creation_form(event_payload, &route_state.config) {
         Ok(event) => {
             debug!("got event {event:?}");
-            if let Err(err) = event.commit(&route_state.db).await {
-                error!("failed POST /event due sql error: {err:#}");
-                return (headers, StatusCode::BAD_REQUEST);
+            {
+                let db_conn = route_state.db.lock().await;
+                if let Err(err) = event.commit(&db_conn) {
+                    error!("failed POST /event due sql error: {err:#}");
+                    return (headers, StatusCode::BAD_REQUEST);
+                }
             }
-            let link = format!("/view?={}", event.uuid);
+            let link = format!("/event?={}", event.uuid);
             match link.parse() {
                 Err(_) => return (headers, StatusCode::INTERNAL_SERVER_ERROR),
                 Ok(link_header) => headers.insert("HX-Location", link_header),

@@ -134,6 +134,24 @@ label{
   text-transform: uppercase;
   font-size: 12px;
 }
+.label-hint{
+  text-transform: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  margin-left: 6px;
+  color: #444;
+}
+.password-group input{
+  letter-spacing: 0.3px;
+}
+.field-note{
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #444;
+  text-transform: none;
+}
 input.form-control, textarea.form-control, select.form-select{
   border: 3px solid var(--ink) !important;
   border-radius: 0 !important;
@@ -182,7 +200,7 @@ input::placeholder, textarea::placeholder{ color:#666; font-weight:600; }
   .card{
     height: calc(100vh - (clamp(10px, 1.8vw, 16px) * 2 + clamp(24px, 3.5vw, 40px)) - 48px);
     /* The above keeps card within viewport; tuned for header size & grid gap */
-    max-height: 620px; /* safety cap on huge screens */
+    max-height: 760px; /* safety cap on huge screens */
   }
   form{
     overflow: hidden; /* prevent accidental scrollbars */

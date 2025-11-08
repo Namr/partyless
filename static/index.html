@@ -71,6 +71,24 @@
             </div>
           </div>
 
+          <div class="group password-group">
+            <label for="password">
+              Password
+              <span class="label-hint">(optional, 5-24 chars)</span>
+            </label>
+            <input
+              type="password"
+              class="form-control"
+              id="password"
+              name="password"
+              minlength="5"
+              maxlength="24"
+              autocomplete="new-password"
+              placeholder="Leave blank to skip"
+            />
+            <p class="field-note">You will need this if you want to update the invite later.</p>
+          </div>
+
           <button type="submit" class="btn btn-primary mt-2">Create Invite</button>
         </form>
       </div>
