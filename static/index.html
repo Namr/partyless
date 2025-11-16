@@ -33,7 +33,7 @@
         </aside>
 
         <!-- Form -->
-        <form hx-post="/event" novalidate>
+        <form hx-post="/event" hx-on::after-request="this.reset()" novalidate>
           <div class="group">
             <label for="event_name">Event Name</label>
             <input type="text" class="form-control" id="event_name" name="event_name" placeholder="Summer BBQ Party"/>

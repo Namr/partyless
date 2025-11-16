@@ -6,13 +6,13 @@ use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::Html,
-    routing::get,
+    routing::{get, post},
 };
 use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone};
 use chrono_tz::Tz;
 use clap::Parser;
 use ramhorns::{Content, Template};
-use rusqlite::{Connection, Row};
+use rusqlite::{Connection, Row, ToSql, types::FromSql};
 use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::services::ServeDir;
@@ -65,6 +65,14 @@ struct EventCreationForm {
     password: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RsvpForm {
+    uuid: String,
+    name: String,
+    password: Option<String>,
+    response: String,
+}
+
 #[derive(Debug, Clone, Content)]
 struct EventViewContent<'a> {
     event_name: &'a str,
@@ -78,7 +86,6 @@ struct EventViewContent<'a> {
 impl<'a> From<&'a Event> for EventViewContent<'a> {
     fn from(value: &'a Event) -> EventViewContent<'a> {
         let time_string = format!("{}", value.time.format("%A %B %d %Y %I:%M%p UTC %:::z"));
-
         EventViewContent {
             event_name: &value.event_name,
             hosts_name: &value.host_name,
@@ -130,19 +137,7 @@ impl Event {
             .ok_or(anyhow!("time + timezone was ambigious"))?
             .fixed_offset();
 
-        let password = if let Some(password) = value.password {
-            if password.len() >= 72 || password.is_empty() {
-                None
-            } else {
-                Some(
-                    bcrypt::hash_with_salt(password, config.bcrypt_cost, config.bcrypt_salt)?
-                        .format_for_version(bcrypt::Version::TwoB),
-                )
-            }
-        } else {
-            None
-        };
-
+        let password = hash_password(value.password, config)?;
         Ok(Event {
             uuid: Uuid::new_v4(),
             event_name: value.event_name,
@@ -203,6 +198,94 @@ impl Event {
             .ok()?;
         stmt.query_one((&uuid,), Self::from_sql).ok()
     }
+
+    fn row_id_from_uuid(uuid: &Uuid, conn: &Connection) -> Option<u64> {
+        let mut stmt = conn
+            .prepare_cached("SELECT id FROM events WHERE uuid = ?1")
+            .ok()?;
+        let id: u64 = stmt.query_one((uuid,), |row| row.get(0)).ok()?;
+        Some(id)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum Response {
+    Yes,
+    No,
+    Maybe,
+}
+
+#[derive(Debug, Clone)]
+struct Guest {
+    name: String,
+    password: Option<String>,
+    response: Response,
+}
+
+impl ToSql for Response {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        match self {
+            Response::Yes => 0.to_sql(),
+            Response::No => 1.to_sql(),
+            Response::Maybe => 2.to_sql(),
+        }
+    }
+}
+
+impl FromSql for Response {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let i = value.as_i64()?;
+        match i {
+            0 => Ok(Response::Yes),
+            1 => Ok(Response::No),
+            2 => Ok(Response::Maybe),
+            other => Err(rusqlite::types::FromSqlError::OutOfRange(other)),
+        }
+    }
+}
+
+impl TryFrom<&str> for Response {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self> {
+        match value {
+            "yes" => Ok(Response::Yes),
+            "no" => Ok(Response::No),
+            "maybe" => Ok(Response::Maybe),
+            other => Err(anyhow!(
+                "failed to convert string {} to Response enum",
+                other
+            )),
+        }
+    }
+}
+
+impl Guest {
+    fn from_rsvp_form(value: RsvpForm, config: &Config) -> Result<Self> {
+        let password = hash_password(value.password, config)?;
+        let response = Response::try_from(value.response.as_str())?;
+        Ok(Guest {
+            name: value.name,
+            password,
+            response,
+        })
+    }
+
+    fn commit(&self, conn: &Connection, event_uuid: &Uuid) -> Result<()> {
+        let event_id = Event::row_id_from_uuid(event_uuid, conn)
+            .ok_or(anyhow!("no event with uuid {}", event_uuid))?;
+        let mut stmt = conn.prepare_cached(
+            "INSERT into guests(
+                event_id, 
+                name, 
+                password, 
+                response
+                ) 
+            VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        stmt.execute((event_id, &self.name, &self.password, self.response))?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,9 +297,7 @@ struct EventViewQuery {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new("tower_http=warn"))
-                .unwrap(),
+            EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new("tower_http=warn"))?,
         )
         .init();
 
@@ -225,23 +306,38 @@ async fn main() -> Result<()> {
     let db = Arc::new(Mutex::new(Connection::open(args.db_file)?));
     let mut route_state = RouteState { config, db };
 
-    init_db_schema(&mut route_state).await.unwrap();
+    init_db_schema(&mut route_state).await?;
 
     let app = Router::new()
         .fallback_service(ServeDir::new(args.static_pages))
         .route("/event", get(get_event).post(post_event))
+        .route("/rsvp", post(post_rsvp))
         .layer(TraceLayer::new_for_http())
         .with_state(route_state);
 
-    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    info!("server started on {}", listener.local_addr().unwrap());
+    let listener = TcpListener::bind("0.0.0.0:3000").await?;
+    info!("server started on {}", listener.local_addr()?);
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
-        .await
-        .unwrap();
+        .await?;
 
     Ok(())
+}
+
+fn hash_password(maybe_password: Option<String>, config: &Config) -> Result<Option<String>> {
+    if let Some(password) = maybe_password {
+        if password.len() >= 72 || password.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(
+                bcrypt::hash_with_salt(password, config.bcrypt_cost, config.bcrypt_salt)?
+                    .format_for_version(bcrypt::Version::TwoB),
+            ))
+        }
+    } else {
+        Ok(None)
+    }
 }
 
 /*
@@ -265,6 +361,24 @@ async fn init_db_schema(route_state: &mut RouteState) -> Result<()> {
             description TEXT NOT NULL,
             time TEXT NOT NULL,
             password BLOB
+        )",
+            (),
+        )?;
+    }
+
+    if let Err(rusqlite::Error::QueryReturnedNoRows) = db.query_one(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='guests'",
+        (),
+        |row| row.get::<usize, String>(0),
+    ) {
+        info!("creating guests table!");
+        db.execute(
+            "CREATE TABLE guests (
+            id    INTEGER PRIMARY KEY,
+            event_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            response INTEGER NOT NULL,
+            password TEXT
         )",
             (),
         )?;
@@ -345,5 +459,30 @@ async fn post_event(
             error!("failed to parse event payload; err: {err:#}");
             (headers, StatusCode::BAD_REQUEST)
         }
+    }
+}
+
+async fn post_rsvp(
+    State(route_state): State<RouteState>,
+    Form(rsvp_payload): Form<RsvpForm>,
+) -> (HeaderMap, StatusCode) {
+    let mut headers = HeaderMap::new();
+    if let Ok(event_uuid) = Uuid::parse_str(&rsvp_payload.uuid)
+        && let Ok(guest) = Guest::from_rsvp_form(rsvp_payload, &route_state.config)
+    {
+        let db_conn = route_state.db.lock().await;
+        info!("event_uuid: {} guest {:?}", event_uuid, guest);
+        match guest.commit(&db_conn, &event_uuid) {
+            Ok(()) => {
+                headers.insert("HX-Refresh", "true".parse().unwrap());
+                (headers, StatusCode::OK)
+            }
+            Err(err) => {
+                error!("failed to commit guest into db {err:#}");
+                (headers, StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    } else {
+        (headers, StatusCode::BAD_REQUEST)
     }
 }
