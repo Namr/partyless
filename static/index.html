@@ -36,22 +36,22 @@
         <form hx-post="/event" hx-on::after-request="this.reset()" novalidate>
           <div class="group">
             <label for="event_name">Event Name</label>
-            <input type="text" class="form-control" id="event_name" name="event_name" placeholder="Summer BBQ Party"/>
+            <input type="text" class="form-control" id="event_name" name="event_name" placeholder="Summer BBQ Party" autocomplete="off"/>
           </div>
 
           <div class="group">
             <label for="hosts_name">Host's Name</label>
-            <input type="text" class="form-control" id="hosts_name" name="hosts_name" placeholder="Jane Doe"/>
+            <input type="text" class="form-control" id="hosts_name" name="hosts_name" placeholder="Jane Doe" autocomplete="off"/>
           </div>
 
           <div class="group">
             <label for="address">Event Address</label>
-            <input type="text" class="form-control" id="address" name="address" placeholder="123 Main Street, City, State"/>
+            <input type="text" class="form-control" id="address" name="address" placeholder="123 Main Street, City, State" autocomplete="off"/>
           </div>
 
           <div class="group">
             <label for="description">Description</label>
-            <textarea class="form-control" id="description" name="description" rows="3" placeholder="Tell your guests about your event..."></textarea>
+            <textarea class="form-control" id="description" name="description" rows="3" placeholder="Tell your guests about your event..." autocomplete="off"></textarea>
           </div>
 
           <div class="row-lite">

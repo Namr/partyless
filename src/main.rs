@@ -1,4 +1,4 @@
-use std::{fs::read_to_string, sync::Arc};
+use std::{fmt, fs::read_to_string, sync::Arc};
 
 use anyhow::{Result, anyhow};
 use axum::{
@@ -69,6 +69,7 @@ struct EventCreationForm {
 struct RsvpForm {
     uuid: String,
     name: String,
+    note: String,
     password: Option<String>,
     response: String,
 }
@@ -83,16 +84,16 @@ struct EventViewContent<'a> {
     guests: Vec<GuestContent<'a>>,
 }
 
-impl<'a> From<&'a Event> for EventViewContent<'a> {
-    fn from(value: &'a Event) -> EventViewContent<'a> {
-        let time_string = format!("{}", value.time.format("%A %B %d %Y %I:%M%p UTC %:::z"));
+impl<'a> EventViewContent<'a> {
+    fn new(event: &'a Event, guests: &'a Vec<Guest>) -> EventViewContent<'a>{
+        let time_string = format!("{}", event.time.format("%A %B %d %Y %I:%M%p UTC %:::z"));
         EventViewContent {
-            event_name: &value.event_name,
-            hosts_name: &value.host_name,
-            address: &value.address,
-            description: &value.description,
+            event_name: &event.event_name,
+            hosts_name: &event.host_name,
+            address: &event.address,
+            description: &event.description,
             time: time_string,
-            guests: vec![],
+            guests: guests.iter().map(|g| GuestContent::from(g)).collect(),
         }
     }
 }
@@ -101,7 +102,17 @@ impl<'a> From<&'a Event> for EventViewContent<'a> {
 struct GuestContent<'a> {
     name: &'a str,
     note: &'a str,
-    status: &'a str,
+    status: String,
+}
+
+impl<'a> From<&'a Guest> for GuestContent<'a> {
+    fn from(value: &'a Guest) -> Self {
+        Self {
+            name: &value.name,
+            note: &value.note,
+            status: value.response.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -215,13 +226,6 @@ enum Response {
     Maybe,
 }
 
-#[derive(Debug, Clone)]
-struct Guest {
-    name: String,
-    password: Option<String>,
-    response: Response,
-}
-
 impl ToSql for Response {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         match self {
@@ -229,6 +233,12 @@ impl ToSql for Response {
             Response::No => 1.to_sql(),
             Response::Maybe => 2.to_sql(),
         }
+    }
+}
+
+impl fmt::Display for Response {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
     }
 }
 
@@ -260,12 +270,21 @@ impl TryFrom<&str> for Response {
     }
 }
 
+#[derive(Debug, Clone)]
+struct Guest {
+    name: String,
+    note: String,
+    password: Option<String>,
+    response: Response,
+}
+
 impl Guest {
     fn from_rsvp_form(value: RsvpForm, config: &Config) -> Result<Self> {
         let password = hash_password(value.password, config)?;
         let response = Response::try_from(value.response.as_str())?;
         Ok(Guest {
             name: value.name,
+            note: value.note,
             password,
             response,
         })
@@ -278,13 +297,27 @@ impl Guest {
             "INSERT into guests(
                 event_id, 
                 name, 
+                note,
                 password, 
                 response
                 ) 
-            VALUES (?1, ?2, ?3, ?4)",
+            VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
-        stmt.execute((event_id, &self.name, &self.password, self.response))?;
+        stmt.execute((event_id, &self.name, &self.note, &self.password, self.response))?;
         Ok(())
+    }
+
+    fn load_from_event_uuid(event_uuid: Uuid, conn: &Connection) -> Option<Vec<Self>> {
+        let mut stmt = conn
+            .prepare_cached("SELECT name, note, response FROM events RIGHT JOIN guests ON guests.event_id = events.id WHERE uuid = ?1").ok()?;
+        let res = stmt.query_map((event_uuid,), |row| Ok(Guest {
+            name: row.get("name")?,
+            note: row.get("note")?,
+            response: row.get("response")?,
+            password: None
+        })).ok()?;
+
+        Some(res.filter_map(|guest| guest.ok()).collect::<Vec<Self>>())
     }
 }
 
@@ -377,6 +410,7 @@ async fn init_db_schema(route_state: &mut RouteState) -> Result<()> {
             id    INTEGER PRIMARY KEY,
             event_id INTEGER NOT NULL,
             name TEXT NOT NULL,
+            note TEXT,
             response INTEGER NOT NULL,
             password TEXT
         )",
@@ -414,16 +448,16 @@ async fn get_event(
 ) -> (StatusCode, Html<String>) {
     if let Ok(uuid) = Uuid::parse_str(&params.uuid) {
         info!("{params:?}");
-        let maybe_event = {
+        let (maybe_event, maybe_guests) = {
             let db_conn = route_state.db.lock().await;
-            Event::load_from_uuid(uuid, &db_conn)
+            (Event::load_from_uuid(uuid, &db_conn), Guest::load_from_event_uuid(uuid, &db_conn))
         };
 
-        if let Some(event) = maybe_event {
+        if let Some(event) = maybe_event && let Some(guests) = maybe_guests {
             info!("got event {event:?}");
             let template =
                 Template::new(read_to_string("templates/event.mustache").unwrap()).unwrap();
-            let content = EventViewContent::from(&event);
+            let content = EventViewContent::new(&event, &guests);
             (StatusCode::OK, Html(template.render(&content)))
         } else {
             (StatusCode::NOT_FOUND, Html("".to_owned()))
