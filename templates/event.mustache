@@ -12,6 +12,8 @@
   <style>
     .event-card {
       width: min(100%, 1080px);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .card-pane {
@@ -69,12 +71,17 @@
     .info-value {
       font-size: 18px;
       line-height: 1.2;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .event-description {
       margin: 0;
       font-size: 16px;
       line-height: 1.5;
+      max-width: 496px;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .guest-header {
@@ -130,6 +137,8 @@
       gap: 8px;
       align-items: flex-start;
       flex-wrap: wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .guest-meta {
@@ -152,6 +161,8 @@
     .guest-name {
       font-size: 16px;
       text-transform: uppercase;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .guest-note {
@@ -337,17 +348,17 @@
             <div class="form-grid">
               <label class="form-field">
                 <span class="info-label">Name</span>
-                <input class="form-input" type="text" name="name" placeholder="Your name" autocomplete="off" required />
+                <input class="form-input" type="text" name="name" placeholder="Your name" autocomplete="off" maxlength="40" required />
               </label>
 
               <label class="form-field">
                 <span class="info-label">Password <span class="optional-note">(optional)</span></span>
-                <input class="form-input" type="password" name="password" placeholder="Set a password to edit later" autocomplete="off"/>
+                <input class="form-input" type="password" name="password" placeholder="Set a password to edit later" autocomplete="off" minlength="5" maxlength="24"/>
               </label>
 
               <label class="form-field">
                 <span class="info-label">Note <span class="optional-note">(optional)</span></span>
-                <input class="form-input" type="text" name="note" placeholder="Message for the host" autocomplete="off" />
+                <input class="form-input" type="text" name="note" placeholder="Message for the host" autocomplete="off" maxlength="90" />
               </label>
             </div>
 
