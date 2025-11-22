@@ -8,7 +8,7 @@ use axum::{
     response::Html,
     routing::{get, post},
 };
-use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone};
+use chrono::{DateTime, Utc, NaiveDateTime, TimeZone};
 use chrono_tz::Tz;
 use clap::Parser;
 use ramhorns::{Content, Template};
@@ -86,13 +86,12 @@ struct EventViewContent<'a> {
 
 impl<'a> EventViewContent<'a> {
     fn new(event: &'a Event, guests: &'a Vec<Guest>) -> EventViewContent<'a>{
-        let time_string = format!("{}", event.time.format("%A %B %d %Y %I:%M%p UTC %:::z"));
         EventViewContent {
             event_name: &event.event_name,
             hosts_name: &event.host_name,
             address: &event.address,
             description: &event.description,
-            time: time_string,
+            time: event.time.to_rfc2822(),
             guests: guests.iter().map(|g| GuestContent::from(g)).collect(),
         }
     }
@@ -123,7 +122,7 @@ struct Event {
     address: String,
     description: String,
     password: Option<String>,
-    time: DateTime<FixedOffset>,
+    time: DateTime<Utc>,
 }
 
 impl Event {
@@ -146,7 +145,7 @@ impl Event {
             .from_local_datetime(&naive_time)
             .single()
             .ok_or(anyhow!("time + timezone was ambigious"))?
-            .fixed_offset();
+            .to_utc();
 
         let password = hash_password(value.password, config)?;
         Ok(Event {
@@ -194,7 +193,7 @@ impl Event {
                 host_name: row.get::<&str, String>("host_name")?,
                 address: row.get::<&str, String>("address")?,
                 description: row.get::<&str, String>("description")?,
-                time,
+                time: time.to_utc(),
                 password,
             })
         } else {
