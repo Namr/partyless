@@ -1,6 +1,6 @@
 use std::{fmt, fs::read_to_string, sync::Arc};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use axum::{
     Form, Router,
     extract::{Query, State},
@@ -334,7 +334,7 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let config: Config = toml::from_str(&read_to_string(args.config_file)?)?;
+    let config: Config = toml::from_str(&read_to_string(args.config_file).with_context(|| "Couldn't find configuration TOML file")?)?;
     let db = Arc::new(Mutex::new(Connection::open(args.db_file)?));
     let mut route_state = RouteState { config, db };
 
