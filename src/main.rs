@@ -1,4 +1,4 @@
-use std::{fmt, fs::read_to_string, sync::Arc};
+use std::{fmt, fs::read_to_string, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -8,7 +8,7 @@ use axum::{
     response::Html,
     routing::{get, post},
 };
-use chrono::{DateTime, Utc, NaiveDateTime, TimeZone};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use clap::Parser;
 use ramhorns::{Content, Template};
@@ -20,6 +20,9 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
+
+const CLEANUP_PERIOD: Duration = Duration::from_secs(5 * 60 * 60);
+const CLEANUP_THRESHOLD: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -85,7 +88,7 @@ struct EventViewContent<'a> {
 }
 
 impl<'a> EventViewContent<'a> {
-    fn new(event: &'a Event, guests: &'a Vec<Guest>) -> EventViewContent<'a>{
+    fn new(event: &'a Event, guests: &'a Vec<Guest>) -> EventViewContent<'a> {
         EventViewContent {
             event_name: &event.event_name,
             hosts_name: &event.host_name,
@@ -178,7 +181,7 @@ impl Event {
             &self.host_name,
             &self.address,
             &self.description,
-            &self.time.to_rfc3339(),
+            &self.time.timestamp_millis(),
             &self.password,
         ))?;
         Ok(())
@@ -186,7 +189,7 @@ impl Event {
 
     fn from_sql(row: &Row<'_>) -> rusqlite::Result<Self> {
         let password = row.get::<&str, String>("password").ok();
-        if let Ok(time) = DateTime::parse_from_rfc3339(&row.get::<&str, String>("time")?) {
+        if let Some(time) = DateTime::from_timestamp_millis(row.get::<&str, i64>("time")?) {
             Ok(Self {
                 uuid: row.get::<&str, Uuid>("uuid")?,
                 event_name: row.get::<&str, String>("event_name")?,
@@ -302,19 +305,29 @@ impl Guest {
                 ) 
             VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
-        stmt.execute((event_id, &self.name, &self.note, &self.password, self.response))?;
+        stmt.execute((
+            event_id,
+            &self.name,
+            &self.note,
+            &self.password,
+            self.response,
+        ))?;
         Ok(())
     }
 
     fn load_from_event_uuid(event_uuid: Uuid, conn: &Connection) -> Option<Vec<Self>> {
         let mut stmt = conn
             .prepare_cached("SELECT name, note, response FROM events RIGHT JOIN guests ON guests.event_id = events.id WHERE uuid = ?1").ok()?;
-        let res = stmt.query_map((event_uuid,), |row| Ok(Guest {
-            name: row.get("name")?,
-            note: row.get("note")?,
-            response: row.get("response")?,
-            password: None
-        })).ok()?;
+        let res = stmt
+            .query_map((event_uuid,), |row| {
+                Ok(Guest {
+                    name: row.get("name")?,
+                    note: row.get("note")?,
+                    response: row.get("response")?,
+                    password: None,
+                })
+            })
+            .ok()?;
 
         Some(res.filter_map(|guest| guest.ok()).collect::<Vec<Self>>())
     }
@@ -334,8 +347,12 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let config: Config = toml::from_str(&read_to_string(args.config_file).with_context(|| "Couldn't find configuration TOML file")?)?;
+    let config: Config = toml::from_str(
+        &read_to_string(args.config_file)
+            .with_context(|| "Couldn't find configuration TOML file")?,
+    )?;
     let db = Arc::new(Mutex::new(Connection::open(args.db_file)?));
+    tokio::spawn(clean_database(db.clone()));
     let mut route_state = RouteState { config, db };
 
     init_db_schema(&mut route_state).await?;
@@ -391,7 +408,7 @@ async fn init_db_schema(route_state: &mut RouteState) -> Result<()> {
             host_name TEXT NOT NULL,
             address TEXT NOT NULL,
             description TEXT NOT NULL,
-            time TEXT NOT NULL,
+            time INTEGER NOT NULL,
             password BLOB
         )",
             (),
@@ -440,6 +457,40 @@ async fn shutdown_signal() {
     }
 }
 
+async fn clean_database(db: Arc<Mutex<Connection>>) -> Result<()> {
+    loop {
+        {
+            let conn = db.lock().await;
+            let mut search_stmt = conn.prepare("SELECT id FROM events WHERE time <= ?1")?;
+            let mut delete_stmt = conn.prepare("DELETE FROM events WHERE id = ?1")?;
+            info!("Running database cleanup task...");
+            let now = Utc::now().timestamp_millis() - CLEANUP_THRESHOLD.as_millis() as i64;
+            let num_removed =
+                if let Ok(ids) = search_stmt.query_map((now,), |row| row.get::<usize, u64>(0)) {
+                    ids.fold(0, |acc, mid| {
+                        if let Ok(id) = mid {
+                            if let Err(err) = delete_stmt.execute((id,)) {
+                                error!("Failed to delete {} due to error {}", id, err);
+                                acc
+                            } else {
+                                acc + 1
+                            }
+                        } else {
+                            acc
+                        }
+                    })
+                } else {
+                    error!("Failed to query for finished events!");
+                    0
+                };
+            info!("Removed {} entries", num_removed);
+        }
+
+        // run every 5 hours
+        tokio::time::sleep(CLEANUP_PERIOD).await;
+    }
+}
+
 #[axum::debug_handler]
 async fn get_event(
     State(route_state): State<RouteState>,
@@ -449,10 +500,15 @@ async fn get_event(
         info!("{params:?}");
         let (maybe_event, maybe_guests) = {
             let db_conn = route_state.db.lock().await;
-            (Event::load_from_uuid(uuid, &db_conn), Guest::load_from_event_uuid(uuid, &db_conn))
+            (
+                Event::load_from_uuid(uuid, &db_conn),
+                Guest::load_from_event_uuid(uuid, &db_conn),
+            )
         };
 
-        if let Some(event) = maybe_event && let Some(guests) = maybe_guests {
+        if let Some(event) = maybe_event
+            && let Some(guests) = maybe_guests
+        {
             info!("got event {event:?}");
             let template =
                 Template::new(read_to_string("templates/event.mustache").unwrap()).unwrap();
@@ -484,7 +540,7 @@ async fn post_event(
             let link = format!("/event?uuid={}", event.uuid);
             match link.parse() {
                 Err(_) => return (headers, StatusCode::INTERNAL_SERVER_ERROR),
-                Ok(link_header) => headers.insert("HX-Location", link_header),
+                Ok(link_header) => headers.insert("HX-Redirect", link_header),
             };
             (headers, StatusCode::OK)
         }

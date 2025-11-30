@@ -52,6 +52,8 @@ header{
   text-transform: uppercase;
   letter-spacing: 1px;
 }
+.brand a{
+}
 .tag{
   font-size: clamp(12px, 1.5vw, 16px);
   padding: 6px 10px;
