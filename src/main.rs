@@ -54,6 +54,7 @@ struct Config {
 struct RouteState {
     config: Config,
     db: Arc<Mutex<Connection>>,
+    event_template: Arc<Template<'static>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,9 +377,24 @@ async fn main() -> Result<()> {
         &read_to_string(args.config_file)
             .with_context(|| "Couldn't find configuration TOML file")?,
     )?;
+
     let db = Arc::new(Mutex::new(Connection::open(args.db_file)?));
+
+    // templates
+    let event_template = Arc::new(
+        Template::new(
+            read_to_string("templates/event.mustache")
+                .context("failed to read event mustache template")?,
+        )
+        .context("failed to instantiate mustache template")?,
+    );
+
     tokio::spawn(clean_database(db.clone()));
-    let mut route_state = RouteState { config, db };
+    let mut route_state = RouteState {
+        config,
+        db,
+        event_template,
+    };
 
     init_db_schema(&mut route_state).await?;
 
@@ -532,13 +548,11 @@ async fn get_event(
     };
 
     debug!("got event {event:?}");
-    let template = Template::new(
-        read_to_string("templates/event.mustache")
-            .context("failed to read event mustache template")?,
-    )
-    .context("failed to instantiate mustache template")?;
     let content = EventViewContent::new(&event, &guests);
-    Ok((StatusCode::OK, Html(template.render(&content))))
+    Ok((
+        StatusCode::OK,
+        Html(route_state.event_template.render(&content)),
+    ))
 }
 
 async fn post_event(
