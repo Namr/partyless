@@ -133,7 +133,6 @@ impl Event {
         if value.event_name.is_empty()
             || value.hosts_name.is_empty()
             || value.address.is_empty()
-            || value.description.is_empty()
             || value.date.is_empty()
             || value.time.is_empty()
             || value.timezone.is_empty()
