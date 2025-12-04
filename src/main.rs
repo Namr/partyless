@@ -18,7 +18,7 @@ use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 use uuid::Uuid;
 
 const CLEANUP_PERIOD: Duration = Duration::from_secs(5 * 60 * 60);
@@ -88,14 +88,14 @@ struct EventViewContent<'a> {
 }
 
 impl<'a> EventViewContent<'a> {
-    fn new(event: &'a Event, guests: &'a Vec<Guest>) -> EventViewContent<'a> {
+    fn new(event: &'a Event, guests: &'a [Guest]) -> EventViewContent<'a> {
         EventViewContent {
             event_name: &event.event_name,
             hosts_name: &event.host_name,
             address: &event.address,
             description: &event.description,
             time: event.time.to_rfc2822(),
-            guests: guests.iter().map(|g| GuestContent::from(g)).collect(),
+            guests: guests.iter().map(GuestContent::from).collect(),
         }
     }
 }
@@ -364,6 +364,11 @@ async fn main() -> Result<()> {
         .with_env_filter(
             EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new("tower_http=warn"))?,
         )
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .with_level(true)
+        .with_span_events(FmtSpan::CLOSE)
         .init();
 
     let args = Args::parse();
@@ -564,6 +569,6 @@ async fn post_rsvp(
     let db_conn = route_state.db.lock().await;
     guest.commit(&db_conn, &event_uuid)?;
 
-    headers.insert("HX-Refresh", "true".parse().unwrap());
+    headers.insert("HX-Refresh", "true".parse()?);
     Ok((headers, StatusCode::OK))
 }
