@@ -5,7 +5,7 @@ use axum::{
     Form, Router,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
-    response::Html,
+    response::{Html, IntoResponse},
     routing::{get, post},
 };
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
@@ -338,6 +338,27 @@ struct EventViewQuery {
     uuid: String,
 }
 
+// error handling
+struct AppError(anyhow::Error);
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self {
+        Self(err.into())
+    }
+}
+impl IntoResponse for AppError {
+    fn into_response(self) -> axum::response::Response {
+        error!("Route failed with error: {:#}", self.0);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("The server failed to process this request"),
+        )
+            .into_response()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -495,83 +516,55 @@ async fn clean_database(db: Arc<Mutex<Connection>>) -> Result<()> {
 async fn get_event(
     State(route_state): State<RouteState>,
     Query(params): Query<EventViewQuery>,
-) -> (StatusCode, Html<String>) {
-    if let Ok(uuid) = Uuid::parse_str(&params.uuid) {
-        info!("{params:?}");
-        let (maybe_event, maybe_guests) = {
-            let db_conn = route_state.db.lock().await;
-            (
-                Event::load_from_uuid(uuid, &db_conn),
-                Guest::load_from_event_uuid(uuid, &db_conn),
-            )
-        };
+) -> Result<(StatusCode, Html<String>), AppError> {
+    let uuid = Uuid::parse_str(&params.uuid)?;
+    let (event, guests) = {
+        let db_conn = route_state.db.lock().await;
+        (
+            Event::load_from_uuid(uuid, &db_conn).context("failed to load event from uuid")?,
+            Guest::load_from_event_uuid(uuid, &db_conn)
+                .context("failed to load guests from event uuid")?,
+        )
+    };
 
-        if let Some(event) = maybe_event
-            && let Some(guests) = maybe_guests
-        {
-            info!("got event {event:?}");
-            let template =
-                Template::new(read_to_string("templates/event.mustache").unwrap()).unwrap();
-            let content = EventViewContent::new(&event, &guests);
-            (StatusCode::OK, Html(template.render(&content)))
-        } else {
-            (StatusCode::NOT_FOUND, Html("".to_owned()))
-        }
-    } else {
-        (StatusCode::BAD_REQUEST, Html("".to_owned()))
-    }
+    debug!("got event {event:?}");
+    let template = Template::new(
+        read_to_string("templates/event.mustache")
+            .context("failed to read event mustache template")?,
+    )
+    .context("failed to instantiate mustache template")?;
+    let content = EventViewContent::new(&event, &guests);
+    Ok((StatusCode::OK, Html(template.render(&content))))
 }
 
 async fn post_event(
     State(route_state): State<RouteState>,
     Form(event_payload): Form<EventCreationForm>,
-) -> (HeaderMap, StatusCode) {
+) -> Result<(HeaderMap, StatusCode), AppError> {
     let mut headers = HeaderMap::new();
-    match Event::from_event_creation_form(event_payload, &route_state.config) {
-        Ok(event) => {
-            debug!("got event {event:?}");
-            {
-                let db_conn = route_state.db.lock().await;
-                if let Err(err) = event.commit(&db_conn) {
-                    error!("failed POST /event due sql error: {err:#}");
-                    return (headers, StatusCode::BAD_REQUEST);
-                }
-            }
-            let link = format!("/event?uuid={}", event.uuid);
-            match link.parse() {
-                Err(_) => return (headers, StatusCode::INTERNAL_SERVER_ERROR),
-                Ok(link_header) => headers.insert("HX-Redirect", link_header),
-            };
-            (headers, StatusCode::OK)
-        }
-        Err(err) => {
-            error!("failed to parse event payload; err: {err:#}");
-            (headers, StatusCode::BAD_REQUEST)
-        }
+    let event = Event::from_event_creation_form(event_payload, &route_state.config)?;
+    debug!("got event {event:?}");
+    {
+        let db_conn = route_state.db.lock().await;
+        event.commit(&db_conn)?;
     }
+    let link = format!("/event?uuid={}", event.uuid).parse()?;
+    headers.insert("HX-Redirect", link);
+    Ok((headers, StatusCode::OK))
 }
 
 async fn post_rsvp(
     State(route_state): State<RouteState>,
     Form(rsvp_payload): Form<RsvpForm>,
-) -> (HeaderMap, StatusCode) {
+) -> Result<(HeaderMap, StatusCode), AppError> {
     let mut headers = HeaderMap::new();
-    if let Ok(event_uuid) = Uuid::parse_str(&rsvp_payload.uuid)
-        && let Ok(guest) = Guest::from_rsvp_form(rsvp_payload, &route_state.config)
-    {
-        let db_conn = route_state.db.lock().await;
-        info!("event_uuid: {} guest {:?}", event_uuid, guest);
-        match guest.commit(&db_conn, &event_uuid) {
-            Ok(()) => {
-                headers.insert("HX-Refresh", "true".parse().unwrap());
-                (headers, StatusCode::OK)
-            }
-            Err(err) => {
-                error!("failed to commit guest into db {err:#}");
-                (headers, StatusCode::INTERNAL_SERVER_ERROR)
-            }
-        }
-    } else {
-        (headers, StatusCode::BAD_REQUEST)
-    }
+    let event_uuid = Uuid::parse_str(&rsvp_payload.uuid)?;
+    let guest = Guest::from_rsvp_form(rsvp_payload, &route_state.config)?;
+    info!("event_uuid: {} guest {:?}", event_uuid, guest);
+
+    let db_conn = route_state.db.lock().await;
+    guest.commit(&db_conn, &event_uuid)?;
+
+    headers.insert("HX-Refresh", "true".parse().unwrap());
+    Ok((headers, StatusCode::OK))
 }
