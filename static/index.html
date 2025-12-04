@@ -90,12 +90,17 @@
           </div>
 
           <button type="submit" class="btn btn-primary mt-2">Create Invite</button>
+          <div id="error-modal-container"></div>
         </form>
       </div>
     </main>
   </div>
 
   <script>
+    document.body.addEventListener("htmx:responseError", function(evt) {
+      let target = document.querySelector("#error-modal-container");
+      htmx.swap(target, evt.detail.xhr.responseText, "innerHTML");
+    });
     // Populate time zones (kept from your original)
     (function () {
       const select = document.getElementById('timezone');

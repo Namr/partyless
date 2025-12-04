@@ -381,6 +381,7 @@
             </div>
 
             <button class="submit-button" type="submit">Send RSVP</button>
+            <div id="error-modal-container"></div>
           </form>
 
           <div class="guest-header">
@@ -422,6 +423,10 @@
 </body>
 
 <script>
+  document.body.addEventListener("htmx:responseError", function(evt) {
+    let target = document.querySelector("#error-modal-container");
+    htmx.swap(target, evt.detail.xhr.responseText, "innerHTML");
+  });
   (function () {
     const params = new URLSearchParams(window.location.search);
     const uuidValue = params.get('uuid') || '';

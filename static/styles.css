@@ -146,6 +146,11 @@ main{
   font-size: clamp(12px, 1.4vw, 14px);
 }
 
+.error{
+  color: #F08080;
+  font-size: clamp(10px, 1.4vw, 12px);
+}
+
 /* Form side */
 form{
   padding: clamp(14px, 2vw, 22px);

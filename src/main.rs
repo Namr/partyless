@@ -353,7 +353,7 @@ impl IntoResponse for AppError {
         error!("Route failed with error: {:#}", self.0);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("The server failed to process this request"),
+            format!("<p class=\"error\">Request Failed. Error: {:#}</p>", self.0),
         )
             .into_response()
     }
