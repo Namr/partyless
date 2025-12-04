@@ -28,6 +28,8 @@ body{
   padding: clamp(12px, 1.8vw, 18px);
 }
 
+
+
 /* Neo-brutalist header */
 header{
   background: var(--mint);
@@ -52,8 +54,31 @@ header{
   text-transform: uppercase;
   letter-spacing: 1px;
 }
-.brand a{
+.brand a {
+    text-decoration: inherit;
+    color: inherit;
+    cursor: auto;
+    background: none;
 }
+.brand a:hover {
+    text-decoration: inherit;
+    color: inherit;
+    cursor: auto;
+    background: none;
+}
+.brand a:focus {
+    text-decoration: inherit;
+    color: inherit;
+    cursor: auto;
+    background: none;
+}
+.brand a:visited {
+    text-decoration: inherit;
+    color: inherit;
+    cursor: auto;
+    background: none;
+}
+
 .tag{
   font-size: clamp(12px, 1.5vw, 16px);
   padding: 6px 10px;
