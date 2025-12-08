@@ -148,6 +148,28 @@
       margin-left: auto;
     }
 
+    .guest-edit-meta {
+      display: flex;
+      display: inline;
+      margin-top: auto;
+    }
+
+    .guest-edit-text {
+      font-size: 9px;
+      margin: 0;
+      padding: 0;
+    }
+
+    .guest-edit-anchor {
+      color: var(--grey);
+      text-decoration: inherit;
+    }
+
+    .guest-edit-anchor:hover, .guest-edit-anchor:focus {
+      color: var(--green-ink);
+      background: none;
+    }
+
     .guest-pill {
       border: 3px solid var(--ink);
       padding: 4px 8px;
@@ -260,6 +282,31 @@
       background: var(--beige);
     }
 
+    .edit-button-meta {
+      margin-top: auto;
+    }
+  
+    .edit-button {
+      border: 3px solid var(--ink);
+      background: var(--beige);
+      text-transform: uppercase;
+      font-weight: bold;
+      padding: 10px;
+      font-size: 15px;
+      box-shadow: 6px 6px 0 0 var(--ink);
+      cursor: pointer;
+      align-self: center;
+    }
+
+    .edit-button:active {
+      box-shadow: 4px 4px 0 0 var(--ink);
+      transform: translate(2px, 2px);
+    }
+
+    .edit-button:hover {
+      background: var(--paper);
+    }
+
     .submit-button {
       border: 3px solid var(--ink);
       background: var(--mint);
@@ -340,6 +387,10 @@
             <span class="info-label">Details</span>
             <p class="event-description">{{description}}</p>
           </div>
+        
+          <div class="edit-button-meta">
+              <button class="edit-button" hx-on:click="location.href='/edit_event.html';">Edit Event</button>
+          </div>
         </div>
 
         <div class="card-pane guest-pane">
@@ -402,6 +453,9 @@
                     <div class="guest-meta">
                       <span class="guest-pill">{{status}}</span>
                     </div>
+                  </div>
+                  <div class="guest-edit-meta">
+                    <p class="guest-edit-text"><a class="guest-edit-anchor" href="/edit_guest.html">edit</a></p>
                   </div>
                 </article>
               </li>
