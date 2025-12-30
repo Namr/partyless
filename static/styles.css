@@ -98,8 +98,8 @@ a{
 }
 a:hover,
 a:focus{
-  color: var(--paper);
-  background: var(--green-ink);
+  color: var(--green-ink);
+  background: none;
   text-decoration-color: transparent;
   outline: none;
   transition: background 120ms ease;
@@ -164,6 +164,7 @@ form{
   display: grid;
   gap: 6px;
 }
+
 label{
   text-transform: uppercase;
   font-size: 12px;
@@ -236,6 +237,10 @@ input::placeholder, textarea::placeholder{ color:#666; font-weight:600; }
     /* The above keeps card within viewport; tuned for header size & grid gap */
     max-height: 760px; /* safety cap on huge screens */
   }
+  .card.auth-card{
+    height: auto;
+    max-height: none;
+  }
   form{
     overflow: hidden; /* prevent accidental scrollbars */
   }
@@ -280,4 +285,40 @@ input::placeholder, textarea::placeholder{ color:#666; font-weight:600; }
 /* Very small phones */
 @media (max-width: 420px){
   .tag{ display: none; }
+}
+
+/* Auth card - compact centered card for password prompts */
+.card.auth-card {
+  grid-template-columns: 1fr;
+  width: min(100%, 380px);
+  height: auto;
+  max-height: none;
+}
+
+.card.auth-card form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: clamp(14px, 2vw, 22px);
+  gap: 12px;
+}
+
+.card.auth-card .group {
+  width: 100%;
+}
+
+.card.auth-card .auth-title {
+  margin: 0;
+  font-size: 18px;
+  text-transform: uppercase;
+}
+
+.card.auth-card .auth-input {
+  padding: 8px 10px;
+}
+
+.card.auth-card .auth-btn {
+  padding: 8px 14px;
+  width: auto;
 }

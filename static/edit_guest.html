@@ -21,8 +21,25 @@
     </header>
 
     <main>
-      <div class="card">
-        <p> editor </p>
+      <div class="card auth-card" id="auth-card">
+        <form id="auth-form" hx-post="/auth_guest" hx-target="#auth-card" hx-swap="outerHTML">
+          <h2 class="auth-title">Edit Your RSVP</h2>
+          <input type="hidden" name="guest_id" id="guest-id-field" />
+          <div class="group">
+            <label for="password">Password</label>
+            <input
+              type="password"
+              class="form-control auth-input"
+              id="password"
+              name="password"
+              required
+              autocomplete="current-password"
+              placeholder="Enter your RSVP password"
+            />
+          </div>
+          <button type="submit" class="btn btn-primary auth-btn">Submit</button>
+          <div id="error-modal-container"></div>
+        </form>
       </div>
     </main>
   </div>
@@ -32,6 +49,15 @@
       let target = document.querySelector("#error-modal-container");
       htmx.swap(target, evt.detail.xhr.responseText, "innerHTML");
     });
+
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const guestId = params.get('guest_id') || '';
+      const guestIdField = document.getElementById('guest-id-field');
+      if (guestIdField) {
+        guestIdField.value = guestId;
+      }
+    })();
   </script>
 </body>
 </html>

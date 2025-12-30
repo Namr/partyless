@@ -22,6 +22,24 @@
 
     <main>
       <div class="card">
+        <form hx-post="/event" hx-on::after-request="this.reset()">
+          <div class="group">
+            <label for="password">
+              Password
+              <span class="label-hint">(optional, 5-24 chars)</span>
+            </label>
+            <input
+              type="password"
+              class="form-control"
+              id="password"
+              name="password"
+              minlength="5"
+              maxlength="24"
+              autocomplete="new-password"
+              placeholder="Leave blank to skip"
+            />
+          </div>
+        </form>
       </div>
     </main>
   </div>

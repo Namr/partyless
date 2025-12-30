@@ -103,6 +103,7 @@ impl<'a> EventViewContent<'a> {
 
 #[derive(Debug, Clone, Content)]
 struct GuestContent<'a> {
+    id: String,
     name: &'a str,
     note: &'a str,
     status: String,
@@ -111,6 +112,7 @@ struct GuestContent<'a> {
 impl<'a> From<&'a Guest> for GuestContent<'a> {
     fn from(value: &'a Guest) -> Self {
         Self {
+            id: value.uuid.to_string(),
             name: &value.name,
             note: &value.note,
             status: value.response.to_string(),
@@ -211,14 +213,6 @@ impl Event {
             .ok()?;
         stmt.query_one((&uuid,), Self::from_sql).ok()
     }
-
-    fn row_id_from_uuid(uuid: &Uuid, conn: &Connection) -> Option<u64> {
-        let mut stmt = conn
-            .prepare_cached("SELECT id FROM events WHERE uuid = ?1")
-            .ok()?;
-        let id: u64 = stmt.query_one((uuid,), |row| row.get(0)).ok()?;
-        Some(id)
-    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -274,6 +268,7 @@ impl TryFrom<&str> for Response {
 
 #[derive(Debug, Clone)]
 struct Guest {
+    uuid: Uuid,
     name: String,
     note: String,
     password: Option<String>,
@@ -285,6 +280,7 @@ impl Guest {
         let password = hash_password(value.password, config)?;
         let response = Response::try_from(value.response.as_str())?;
         Ok(Guest {
+            uuid: Uuid::new_v4(),
             name: value.name,
             note: value.note,
             password,
@@ -293,20 +289,20 @@ impl Guest {
     }
 
     fn commit(&self, conn: &Connection, event_uuid: &Uuid) -> Result<()> {
-        let event_id = Event::row_id_from_uuid(event_uuid, conn)
-            .ok_or(anyhow!("no event with uuid {}", event_uuid))?;
         let mut stmt = conn.prepare_cached(
             "INSERT into guests(
-                event_id, 
+                uuid,
+                event_uuid, 
                 name, 
                 note,
                 password, 
                 response
                 ) 
-            VALUES (?1, ?2, ?3, ?4, ?5)",
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
         stmt.execute((
-            event_id,
+            &self.uuid,
+            event_uuid,
             &self.name,
             &self.note,
             &self.password,
@@ -315,21 +311,22 @@ impl Guest {
         Ok(())
     }
 
-    fn load_from_event_uuid(event_uuid: Uuid, conn: &Connection) -> Option<Vec<Self>> {
+    fn load_from_event_uuid(event_uuid: Uuid, conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn
-            .prepare_cached("SELECT name, note, response FROM events RIGHT JOIN guests ON guests.event_id = events.id WHERE uuid = ?1").ok()?;
-        let res = stmt
-            .query_map((event_uuid,), |row| {
-                Ok(Guest {
-                    name: row.get("name")?,
-                    note: row.get("note")?,
-                    response: row.get("response")?,
-                    password: None,
-                })
+            .prepare_cached("SELECT guests.uuid, name, note, response 
+                FROM events RIGHT JOIN guests ON guests.event_uuid = events.uuid 
+                WHERE events.uuid = ?1")?;
+        let res = stmt.query_map((event_uuid,), |row| {
+            Ok(Guest {
+                uuid: row.get("guests.uuid")?,
+                name: row.get("name")?,
+                note: row.get("note")?,
+                response: row.get("response")?,
+                password: None,
             })
-            .ok()?;
+        })?;
 
-        Some(res.filter_map(|guest| guest.ok()).collect::<Vec<Self>>())
+        Ok(res.filter_map(|guest| guest.ok()).collect::<Vec<Self>>())
     }
 }
 
@@ -443,8 +440,7 @@ async fn init_db_schema(route_state: &mut RouteState) -> Result<()> {
         info!("creating events table!");
         db.execute(
             "CREATE TABLE events (
-            id    INTEGER PRIMARY KEY,
-            uuid BLOB NOT NULL,
+            uuid BLOB PRIMARY KEY,
             event_name  TEXT NOT NULL,
             host_name TEXT NOT NULL,
             address TEXT NOT NULL,
@@ -464,8 +460,8 @@ async fn init_db_schema(route_state: &mut RouteState) -> Result<()> {
         info!("creating guests table!");
         db.execute(
             "CREATE TABLE guests (
-            id    INTEGER PRIMARY KEY,
-            event_id INTEGER NOT NULL,
+            uuid BLOB PRIMARY KEY,
+            event_uuid BLOB NOT NULL,
             name TEXT NOT NULL,
             note TEXT,
             response INTEGER NOT NULL,
@@ -502,19 +498,25 @@ async fn clean_database(db: Arc<Mutex<Connection>>) -> Result<()> {
     loop {
         {
             let conn = db.lock().await;
-            let mut search_stmt = conn.prepare("SELECT id FROM events WHERE time <= ?1")?;
-            let mut delete_stmt = conn.prepare("DELETE FROM events WHERE id = ?1")?;
+            let mut search_stmt = conn.prepare("SELECT uuid FROM events WHERE time <= ?1")?;
+            let mut delete_stmt = conn.prepare("DELETE FROM events WHERE uuid = ?1")?;
+            let mut delete_guests_stmt =
+                conn.prepare("DELETE FROM guests WHERE event_uuid = ?1")?;
             info!("Running database cleanup task...");
             let now = Utc::now().timestamp_millis() - CLEANUP_THRESHOLD.as_millis() as i64;
+            debug!("now is {now}");
             let num_removed =
-                if let Ok(ids) = search_stmt.query_map((now,), |row| row.get::<usize, u64>(0)) {
-                    ids.fold(0, |acc, mid| {
-                        if let Ok(id) = mid {
-                            if let Err(err) = delete_stmt.execute((id,)) {
-                                error!("Failed to delete {} due to error {}", id, err);
-                                acc
-                            } else {
+                if let Ok(ids) = search_stmt.query_map((now,), |row| row.get::<usize, Uuid>(0)) {
+                    // iterate over all old events
+                    ids.fold(0, |acc, maybe_uuid| {
+                        if let Ok(uuid) = maybe_uuid {
+                            if let Ok(_) = delete_stmt.execute((uuid,))
+                                && let Ok(_) = delete_guests_stmt.execute((uuid,))
+                            {
                                 acc + 1
+                            } else {
+                                error!("Failed to delete {}", uuid);
+                                acc
                             }
                         } else {
                             acc
