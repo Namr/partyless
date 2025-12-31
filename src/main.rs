@@ -84,7 +84,7 @@ struct EventUpdateForm {
     password: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct  EventDeleteForm {
+struct EventDeleteForm {
     event_id: String,
     password: String,
 }
@@ -126,17 +126,31 @@ struct EventViewContent<'a> {
     address: &'a str,
     description: &'a str,
     time: String,
+    yes_num: u32,
+    no_num: u32,
+    maybe_num: u32,
     guests: Vec<GuestContent<'a>>,
 }
 
 impl<'a> EventViewContent<'a> {
     fn new(event: &'a Event, guests: &'a [Guest]) -> EventViewContent<'a> {
+        let (yes_num, no_num, maybe_num) = guests.iter().fold((0, 0, 0), |acc, g| {
+            (
+                acc.0 + (g.response == Response::Yes) as u32,
+                acc.1 + (g.response == Response::No) as u32,
+                acc.2 + (g.response == Response::Maybe) as u32,
+            )
+        });
+
         EventViewContent {
             event_name: &event.event_name,
             hosts_name: &event.host_name,
             address: &event.address,
             description: &event.description,
             time: event.time.to_rfc2822(),
+            yes_num,
+            no_num,
+            maybe_num,
             guests: guests.iter().map(GuestContent::from).collect(),
         }
     }
@@ -255,10 +269,8 @@ impl Event {
     }
 
     fn commit_delete(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare_cached(
-            "DELETE FROM events WHERE uuid = ?1",
-        )?;
-        stmt.execute((self.uuid, ))?;
+        let mut stmt = conn.prepare_cached("DELETE FROM events WHERE uuid = ?1")?;
+        stmt.execute((self.uuid,))?;
         Ok(())
     }
 
@@ -286,7 +298,7 @@ impl Event {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Response {
     Yes,
     No,
@@ -406,10 +418,8 @@ impl Guest {
     }
 
     fn commit_delete(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare_cached(
-            "DELETE FROM guests WHERE uuid = ?1",
-        )?;
-        stmt.execute((self.uuid, ))?;
+        let mut stmt = conn.prepare_cached("DELETE FROM guests WHERE uuid = ?1")?;
+        stmt.execute((self.uuid,))?;
         Ok(())
     }
 
@@ -527,7 +537,9 @@ async fn main() -> Result<()> {
     init_db_schema(&mut route_state).await?;
 
     let app = Router::new()
-        .fallback_service(ServeDir::new(args.static_pages).fallback(ServeFile::new("static/404.html")))
+        .fallback_service(
+            ServeDir::new(args.static_pages).fallback(ServeFile::new("static/404.html")),
+        )
         .route("/event", get(get_event).post(post_event).put(put_event))
         .route("/rsvp", post(post_rsvp).put(put_rsvp))
         // (note: amoussa) these are POSTs because otherwise
@@ -538,7 +550,7 @@ async fn main() -> Result<()> {
         .route("/auth_event", post(post_auth_event))
         .layer(TraceLayer::new_for_http())
         .with_state(route_state);
-    
+
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
     info!("server started on {}", listener.local_addr()?);
 
@@ -680,7 +692,8 @@ async fn get_event(
     let maybe_event = Event::load_from_uuid(uuid, &db_conn);
 
     if let Ok(event) = maybe_event {
-        let guests = Guest::load_from_event_uuid(uuid, &db_conn).context("failed to load guests from event uuid")?;
+        let guests = Guest::load_from_event_uuid(uuid, &db_conn)
+            .context("failed to load guests from event uuid")?;
         let content = EventViewContent::new(&event, &guests);
         Ok((
             StatusCode::OK,
@@ -755,14 +768,17 @@ async fn delete_event(
     let db_conn = route_state.db.lock().await;
     let event_uuid =
         Uuid::parse_str(&event_payload.event_id).with_context(|| "Failed to parse event UUID.")?;
-    let old_event = Event::load_from_uuid(event_uuid, &db_conn).with_context(|| "Failed to load event from UUID.")?;
+    let old_event = Event::load_from_uuid(event_uuid, &db_conn)
+        .with_context(|| "Failed to load event from UUID.")?;
 
     if let Some(ref password_hash) = old_event.password {
         if bcrypt::verify(event_payload.password, &password_hash)? {
             let link = "/index.html".parse()?;
             headers.insert("HX-Redirect", link);
 
-            old_event.commit_delete(&db_conn).with_context(|| "Failed to delete event in database")?;
+            old_event
+                .commit_delete(&db_conn)
+                .with_context(|| "Failed to delete event in database")?;
             return Ok((headers, StatusCode::OK));
         }
     }
@@ -828,7 +844,9 @@ async fn delete_rsvp(
             let link = format!("/event?uuid={}", event_uuid).parse()?;
             headers.insert("HX-Redirect", link);
 
-            old_guest.commit_delete(&db_conn).with_context(|| "Failed to delete guest from database.")?;
+            old_guest
+                .commit_delete(&db_conn)
+                .with_context(|| "Failed to delete guest from database.")?;
             return Ok((headers, StatusCode::OK));
         }
     }
