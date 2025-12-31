@@ -34,3 +34,14 @@
   <button class="submit-button" type="submit">Update RSVP</button>
   <div id="error-modal-container"></div>
 </form>
+
+<script>
+(function() {
+  // Change parent card from auth-card to edit-card for wider display
+  const card = document.getElementById('auth-card');
+  if (card) {
+    card.classList.remove('auth-card');
+    card.classList.add('edit-card');
+  }
+})();
+</script>

@@ -52,7 +52,7 @@
           </div>
         
           <div class="edit-button-meta">
-              <button class="edit-button" hx-on:click="location.href='/edit_event.html';">Edit Event</button>
+              <button class="edit-button" hx-on:click="location.href='/edit_event.html?uuid=' + new URLSearchParams(window.location.search).get('uuid');">Edit Event</button>
           </div>
         </div>
 

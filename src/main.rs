@@ -56,6 +56,7 @@ struct RouteState {
     db: Arc<Mutex<Connection>>,
     event_template: Arc<Template<'static>>,
     guest_edit_template: Arc<Template<'static>>,
+    event_edit_template: Arc<Template<'static>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +69,19 @@ struct EventCreationForm {
     time: String,
     timezone: String,
     password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EventUpdateForm {
+    event_id: String,
+    event_name: String,
+    hosts_name: String,
+    address: String,
+    description: String,
+    date: String,
+    time: String,
+    timezone: String,
+    password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,8 +103,8 @@ struct UpdateRsvpForm {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct GuestAuthForm {
-    guest_id: String,
+struct AuthForm {
+    uuid: String,
     password: String,
 }
 
@@ -147,6 +161,17 @@ struct Event {
     time: DateTime<Utc>,
 }
 
+fn parse_time_data(date: &str, time: &str, timezone: &str) -> Result<DateTime<Utc>> {
+    let tz = timezone.parse::<Tz>()?;
+    let form = format!("{} {}", date, time);
+    let naive_time = NaiveDateTime::parse_from_str(&form, "%Y-%m-%d %H:%M")?;
+    Ok(tz
+        .from_local_datetime(&naive_time)
+        .single()
+        .ok_or(anyhow!("time + timezone was ambigious"))?
+        .to_utc())
+}
+
 impl Event {
     fn from_event_creation_form(value: EventCreationForm, config: &Config) -> Result<Self> {
         if value.event_name.is_empty()
@@ -159,15 +184,7 @@ impl Event {
             return Err(anyhow!("Event creation form had a blank field"));
         }
 
-        let tz = value.timezone.parse::<Tz>()?;
-        let form = format!("{} {}", value.date, value.time);
-        let naive_time = NaiveDateTime::parse_from_str(&form, "%Y-%m-%d %H:%M")?;
-        let time = tz
-            .from_local_datetime(&naive_time)
-            .single()
-            .ok_or(anyhow!("time + timezone was ambigious"))?
-            .to_utc();
-
+        let time = parse_time_data(&value.date, &value.time, &value.timezone)?;
         let password = hash_password(value.password, config)?;
         Ok(Event {
             uuid: Uuid::new_v4(),
@@ -205,6 +222,27 @@ impl Event {
         Ok(())
     }
 
+    fn commit_update(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare_cached(
+            "UPDATE events SET
+                event_name = ?1, 
+                host_name = ?2,
+                address = ?3,
+                description = ?4,
+                time = ?5
+            WHERE uuid = ?6",
+        )?;
+        stmt.execute((
+            &self.event_name,
+            &self.host_name,
+            &self.address,
+            &self.description,
+            &self.time.timestamp_millis(),
+            self.uuid,
+        ))?;
+        Ok(())
+    }
+
     fn from_sql(row: &Row<'_>) -> rusqlite::Result<Self> {
         let password = row.get::<&str, String>("password").ok();
         if let Some(time) = DateTime::from_timestamp_millis(row.get::<&str, i64>("time")?) {
@@ -223,11 +261,9 @@ impl Event {
         }
     }
 
-    fn load_from_uuid(uuid: Uuid, conn: &Connection) -> Option<Self> {
-        let mut stmt = conn
-            .prepare_cached("SELECT * FROM events WHERE uuid = ?1")
-            .ok()?;
-        stmt.query_one((&uuid,), Self::from_sql).ok()
+    fn load_from_uuid(uuid: Uuid, conn: &Connection) -> Result<Self> {
+        let mut stmt = conn.prepare_cached("SELECT * FROM events WHERE uuid = ?1")?;
+        Ok(stmt.query_one((&uuid,), Self::from_sql)?)
     }
 }
 
@@ -440,7 +476,14 @@ async fn main() -> Result<()> {
     let guest_edit_template = Arc::new(
         Template::new(
             read_to_string("templates/guest_edit.mustache")
-                .context("failed to read event mustache template")?,
+                .context("failed to read guest edit mustache template")?,
+        )
+        .context("failed to instantiate mustache template")?,
+    );
+    let event_edit_template = Arc::new(
+        Template::new(
+            read_to_string("templates/event_edit.mustache")
+                .context("failed to read event edit mustache template")?,
         )
         .context("failed to instantiate mustache template")?,
     );
@@ -451,15 +494,17 @@ async fn main() -> Result<()> {
         db,
         event_template,
         guest_edit_template,
+        event_edit_template,
     };
 
     init_db_schema(&mut route_state).await?;
 
     let app = Router::new()
         .fallback_service(ServeDir::new(args.static_pages))
-        .route("/event", get(get_event).post(post_event))
+        .route("/event", get(get_event).post(post_event).put(put_event))
         .route("/rsvp", post(post_rsvp).put(put_rsvp))
         .route("/auth_guest", post(post_auth_guest))
+        .route("/auth_event", post(post_auth_event))
         .layer(TraceLayer::new_for_http())
         .with_state(route_state);
 
@@ -633,6 +678,43 @@ async fn post_event(
     Ok((headers, StatusCode::OK))
 }
 
+async fn put_event(
+    State(route_state): State<RouteState>,
+    Form(event_payload): Form<EventUpdateForm>,
+) -> Result<(HeaderMap, StatusCode), AppError> {
+    let mut headers = HeaderMap::new();
+    let db_conn = route_state.db.lock().await;
+    let event_uuid =
+        Uuid::parse_str(&event_payload.event_id).with_context(|| "Failed to parse event UUID.")?;
+    let mut old_event = Event::load_from_uuid(event_uuid, &db_conn)
+        .with_context(|| "Failed to load event from UUID.")?;
+
+    let new_time = parse_time_data(
+        &event_payload.date,
+        &event_payload.time,
+        &event_payload.timezone,
+    )
+    .with_context(|| "Failed to pars time data")?;
+    old_event.event_name = event_payload.event_name;
+    old_event.host_name = event_payload.hosts_name;
+    old_event.address = event_payload.address;
+    old_event.description = event_payload.description;
+    old_event.time = new_time;
+
+    if let Some(ref password_hash) = old_event.password {
+        if bcrypt::verify(event_payload.password, &password_hash)? {
+            old_event
+                .commit_update(&db_conn)
+                .with_context(|| "Failed to update event in database")?;
+            let link = format!("/event?uuid={}", event_uuid.to_string()).parse()?;
+            headers.insert("HX-Redirect", link);
+            return Ok((headers, StatusCode::OK));
+        }
+    }
+
+    Ok((headers, StatusCode::FORBIDDEN))
+}
+
 async fn post_rsvp(
     State(route_state): State<RouteState>,
     Form(rsvp_payload): Form<RsvpForm>,
@@ -678,10 +760,10 @@ async fn put_rsvp(
 
 async fn post_auth_guest(
     State(route_state): State<RouteState>,
-    Form(auth_form): Form<GuestAuthForm>,
+    Form(auth_form): Form<AuthForm>,
 ) -> Result<(StatusCode, Html<String>), AppError> {
     let db_conn = route_state.db.lock().await;
-    let guest = Guest::load_from_guest_uuid(Uuid::from_str(&auth_form.guest_id)?, &db_conn)?;
+    let guest = Guest::load_from_guest_uuid(Uuid::from_str(&auth_form.uuid)?, &db_conn)?;
     if let Some(ref password_hash) = guest.password {
         if bcrypt::verify(auth_form.password, &password_hash)? {
             // send edit guest form template
@@ -689,6 +771,40 @@ async fn post_auth_guest(
             Ok((
                 StatusCode::OK,
                 Html(route_state.guest_edit_template.render(&content)),
+            ))
+        } else {
+            Ok((
+                StatusCode::BAD_REQUEST,
+                Html("<p class=\"error\">Incorrect password.</p>".to_owned()),
+            ))
+        }
+    } else {
+        Ok((
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error\">This guest did not set a password.</p>".to_owned()),
+        ))
+    }
+}
+
+async fn post_auth_event(
+    State(route_state): State<RouteState>,
+    Form(auth_form): Form<AuthForm>,
+) -> Result<(StatusCode, Html<String>), AppError> {
+    let db_conn = route_state.db.lock().await;
+    let event = Event::load_from_uuid(
+        Uuid::from_str(&auth_form.uuid).with_context(|| "Failed to parse UUID")?,
+        &db_conn,
+    )
+    .with_context(|| "Failed to load event from UUID")?;
+    if let Some(ref password_hash) = event.password {
+        if bcrypt::verify(auth_form.password, &password_hash)
+            .with_context(|| "Failed to validate password")?
+        {
+            // send edit guest form template
+            let content = EventViewContent::new(&event, &[]);
+            Ok((
+                StatusCode::OK,
+                Html(route_state.event_edit_template.render(&content)),
             ))
         } else {
             Ok((
