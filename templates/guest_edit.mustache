@@ -31,7 +31,10 @@
     </div>
   </div>
 
-  <button class="submit-button" type="submit">Update RSVP</button>
+  <div class="button-row">
+    <button class="submit-button" type="submit">Update RSVP</button>
+    <button class="delete-button" type="button" hx-post="/rsvp/delete" hx-include="[name='guest_id'], #stored-password-field" hx-confirm="Are you sure you want to delete your RSVP?">Delete</button>
+  </div>
   <div id="error-modal-container"></div>
 </form>
 

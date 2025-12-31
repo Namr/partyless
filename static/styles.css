@@ -160,6 +160,12 @@ form{
   gap: 12px;
 }
 
+@media (min-width: 992px) {
+  form {
+    gap: 20px;
+  }
+}
+
 .group{
   display: grid;
   gap: 6px;
@@ -660,6 +666,34 @@ input::placeholder, textarea::placeholder{ color:#666; font-weight:600; }
 
 .submit-button:hover {
   background: var(--beige);
+}
+
+.button-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.delete-button {
+  border: 3px solid var(--ink);
+  background: #e74c3c;
+  color: white;
+  text-transform: uppercase;
+  font-weight: bold;
+  padding: 10px;
+  font-size: 15px;
+  box-shadow: 6px 6px 0 0 var(--ink);
+  cursor: pointer;
+}
+
+.delete-button:active {
+  box-shadow: 4px 4px 0 0 var(--ink);
+  transform: translate(2px, 2px);
+}
+
+.delete-button:hover {
+  background: #c0392b;
 }
 
 @media (min-width: 992px) {

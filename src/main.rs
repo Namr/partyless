@@ -83,6 +83,11 @@ struct EventUpdateForm {
     timezone: String,
     password: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct  EventDeleteForm {
+    event_id: String,
+    password: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RsvpForm {
@@ -100,6 +105,12 @@ struct UpdateRsvpForm {
     note: String,
     password: String,
     response: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DeleteRsvpForm {
+    guest_id: String,
+    password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,6 +251,14 @@ impl Event {
             &self.time.timestamp_millis(),
             self.uuid,
         ))?;
+        Ok(())
+    }
+
+    fn commit_delete(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare_cached(
+            "DELETE FROM events WHERE uuid = ?1",
+        )?;
+        stmt.execute((self.uuid, ))?;
         Ok(())
     }
 
@@ -386,6 +405,14 @@ impl Guest {
         Ok(())
     }
 
+    fn commit_delete(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare_cached(
+            "DELETE FROM guests WHERE uuid = ?1",
+        )?;
+        stmt.execute((self.uuid, ))?;
+        Ok(())
+    }
+
     fn get_event_uuid(&self, conn: &Connection) -> Result<Uuid> {
         let mut stmt = conn.prepare_cached("SELECT event_uuid FROM guests WHERE uuid = ?1")?;
         Ok(stmt.query_one((self.uuid,), |r| r.get("event_uuid"))?)
@@ -503,6 +530,10 @@ async fn main() -> Result<()> {
         .fallback_service(ServeDir::new(args.static_pages))
         .route("/event", get(get_event).post(post_event).put(put_event))
         .route("/rsvp", post(post_rsvp).put(put_rsvp))
+        // (note: amoussa) these are POSTs because otherwise
+        // HTMX will send the password as a query param :/
+        .route("/event/delete", post(delete_event))
+        .route("/rsvp/delete", post(delete_rsvp))
         .route("/auth_guest", post(post_auth_guest))
         .route("/auth_event", post(post_auth_event))
         .layer(TraceLayer::new_for_http())
@@ -715,6 +746,29 @@ async fn put_event(
     Ok((headers, StatusCode::FORBIDDEN))
 }
 
+async fn delete_event(
+    State(route_state): State<RouteState>,
+    Form(event_payload): Form<EventDeleteForm>,
+) -> Result<(HeaderMap, StatusCode), AppError> {
+    let mut headers = HeaderMap::new();
+    let db_conn = route_state.db.lock().await;
+    let event_uuid =
+        Uuid::parse_str(&event_payload.event_id).with_context(|| "Failed to parse event UUID.")?;
+    let old_event = Event::load_from_uuid(event_uuid, &db_conn).with_context(|| "Failed to load event from UUID.")?;
+
+    if let Some(ref password_hash) = old_event.password {
+        if bcrypt::verify(event_payload.password, &password_hash)? {
+            let link = "/index.html".parse()?;
+            headers.insert("HX-Redirect", link);
+
+            old_event.commit_delete(&db_conn).with_context(|| "Failed to delete event in database")?;
+            return Ok((headers, StatusCode::OK));
+        }
+    }
+
+    Ok((headers, StatusCode::FORBIDDEN))
+}
+
 async fn post_rsvp(
     State(route_state): State<RouteState>,
     Form(rsvp_payload): Form<RsvpForm>,
@@ -751,6 +805,29 @@ async fn put_rsvp(
             old_guest.commit_update(&db_conn)?;
 
             headers.insert("HX-Redirect", link);
+            return Ok((headers, StatusCode::OK));
+        }
+    }
+
+    Ok((headers, StatusCode::FORBIDDEN))
+}
+
+async fn delete_rsvp(
+    State(route_state): State<RouteState>,
+    Form(rsvp_payload): Form<DeleteRsvpForm>,
+) -> Result<(HeaderMap, StatusCode), AppError> {
+    let mut headers = HeaderMap::new();
+    let guest_uuid = Uuid::parse_str(&rsvp_payload.guest_id)?;
+    let db_conn = route_state.db.lock().await;
+    let old_guest = Guest::load_from_guest_uuid(guest_uuid, &db_conn)?;
+
+    if let Some(ref password_hash) = old_guest.password {
+        if bcrypt::verify(rsvp_payload.password, &password_hash)? {
+            let event_uuid = old_guest.get_event_uuid(&db_conn)?;
+            let link = format!("/event?uuid={}", event_uuid).parse()?;
+            headers.insert("HX-Redirect", link);
+
+            old_guest.commit_delete(&db_conn).with_context(|| "Failed to delete guest from database.")?;
             return Ok((headers, StatusCode::OK));
         }
     }
