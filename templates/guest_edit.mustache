@@ -1,0 +1,50 @@
+<form class="rsvp-form" hx-put="/rsvp" hx-include="[name='guest_id'], #stored-password-field" hx-on::after-request="this.reset()" id="edit-rsvp-form">
+  <h3 class="rsvp-title">Edit Your RSVP</h3>
+  <input type="hidden" name="guest_id" value="{{id}}" />
+  <div class="form-grid">
+    <label class="form-field">
+      <span class="info-label">Name</span>
+      <input class="form-input" type="text" name="name" placeholder="Your name" autocomplete="off" maxlength="40" value="{{name}}" required />
+    </label>
+
+    <label class="form-field">
+      <span class="info-label">Note <span class="optional-note">(optional)</span></span>
+      <input class="form-input" type="text" name="note" placeholder="Message for the host" autocomplete="off" maxlength="90" value="{{note}}" />
+    </label>
+  </div>
+
+  <div class="form-field form-field-centered">
+    <span class="info-label">Will you attend?</span>
+    <div class="rsvp-choices">
+      <label class="choice-wrapper">
+        <input class="choice-input" type="radio" name="response" value="yes" required />
+        <span class="choice-label">Yes</span>
+      </label>
+      <label class="choice-wrapper">
+        <input class="choice-input" type="radio" name="response" value="no" />
+        <span class="choice-label">No</span>
+      </label>
+      <label class="choice-wrapper">
+        <input class="choice-input" type="radio" name="response" value="maybe" />
+        <span class="choice-label">Maybe</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="button-row">
+    <button class="submit-button" type="submit">Update RSVP</button>
+    <button class="delete-button" type="button" hx-post="/rsvp/delete" hx-include="[name='guest_id'], #stored-password-field" hx-confirm="Are you sure you want to delete your RSVP?">Delete</button>
+  </div>
+  <div id="error-modal-container"></div>
+</form>
+
+<script>
+(function() {
+  // Change parent card from auth-card to edit-card for wider display
+  const card = document.getElementById('auth-card');
+  if (card) {
+    card.classList.remove('auth-card');
+    card.classList.add('edit-card');
+  }
+})();
+</script>
