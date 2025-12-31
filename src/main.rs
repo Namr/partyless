@@ -1,4 +1,4 @@
-use std::{fmt, fs::read_to_string, sync::Arc, time::Duration};
+use std::{fmt, fs::read_to_string, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -55,6 +55,7 @@ struct RouteState {
     config: Config,
     db: Arc<Mutex<Connection>>,
     event_template: Arc<Template<'static>>,
+    guest_edit_template: Arc<Template<'static>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +77,21 @@ struct RsvpForm {
     note: String,
     password: Option<String>,
     response: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UpdateRsvpForm {
+    guest_id: String,
+    name: String,
+    note: String,
+    password: String,
+    response: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GuestAuthForm {
+    guest_id: String,
+    password: String,
 }
 
 #[derive(Debug, Clone, Content)]
@@ -288,6 +304,17 @@ impl Guest {
         })
     }
 
+    fn from_sql(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let password = row.get::<&str, String>("password").ok();
+        Ok(Guest {
+            uuid: row.get("uuid")?,
+            name: row.get("name")?,
+            note: row.get("note")?,
+            response: row.get("response")?,
+            password,
+        })
+    }
+
     fn commit(&self, conn: &Connection, event_uuid: &Uuid) -> Result<()> {
         let mut stmt = conn.prepare_cached(
             "INSERT into guests(
@@ -311,14 +338,32 @@ impl Guest {
         Ok(())
     }
 
+    fn commit_update(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare_cached(
+            "UPDATE guests SET
+                name = ?1, 
+                note = ?2,
+                response = ?3
+            WHERE uuid = ?4",
+        )?;
+        stmt.execute((&self.name, &self.note, self.response, self.uuid))?;
+        Ok(())
+    }
+
+    fn get_event_uuid(&self, conn: &Connection) -> Result<Uuid> {
+        let mut stmt = conn.prepare_cached("SELECT event_uuid FROM guests WHERE uuid = ?1")?;
+        Ok(stmt.query_one((self.uuid,), |r| r.get("event_uuid"))?)
+    }
+
     fn load_from_event_uuid(event_uuid: Uuid, conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn
-            .prepare_cached("SELECT guests.uuid, name, note, response 
+        let mut stmt = conn.prepare_cached(
+            "SELECT guests.uuid, name, note, response 
                 FROM events RIGHT JOIN guests ON guests.event_uuid = events.uuid 
-                WHERE events.uuid = ?1")?;
+                WHERE events.uuid = ?1",
+        )?;
         let res = stmt.query_map((event_uuid,), |row| {
             Ok(Guest {
-                uuid: row.get("guests.uuid")?,
+                uuid: row.get("uuid")?,
                 name: row.get("name")?,
                 note: row.get("note")?,
                 response: row.get("response")?,
@@ -327,6 +372,13 @@ impl Guest {
         })?;
 
         Ok(res.filter_map(|guest| guest.ok()).collect::<Vec<Self>>())
+    }
+
+    fn load_from_guest_uuid(guest_uuid: Uuid, conn: &Connection) -> Result<Self> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT uuid, name, note, response, password FROM guests WHERE uuid = ?1",
+        )?;
+        Ok(stmt.query_one((guest_uuid,), Self::from_sql)?)
     }
 }
 
@@ -385,12 +437,20 @@ async fn main() -> Result<()> {
         )
         .context("failed to instantiate mustache template")?,
     );
+    let guest_edit_template = Arc::new(
+        Template::new(
+            read_to_string("templates/guest_edit.mustache")
+                .context("failed to read event mustache template")?,
+        )
+        .context("failed to instantiate mustache template")?,
+    );
 
     tokio::spawn(clean_database(db.clone()));
     let mut route_state = RouteState {
         config,
         db,
         event_template,
+        guest_edit_template,
     };
 
     init_db_schema(&mut route_state).await?;
@@ -398,7 +458,8 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .fallback_service(ServeDir::new(args.static_pages))
         .route("/event", get(get_event).post(post_event))
-        .route("/rsvp", post(post_rsvp))
+        .route("/rsvp", post(post_rsvp).put(put_rsvp))
+        .route("/auth_guest", post(post_auth_guest))
         .layer(TraceLayer::new_for_http())
         .with_state(route_state);
 
@@ -504,7 +565,6 @@ async fn clean_database(db: Arc<Mutex<Connection>>) -> Result<()> {
                 conn.prepare("DELETE FROM guests WHERE event_uuid = ?1")?;
             info!("Running database cleanup task...");
             let now = Utc::now().timestamp_millis() - CLEANUP_THRESHOLD.as_millis() as i64;
-            debug!("now is {now}");
             let num_removed =
                 if let Ok(ids) = search_stmt.query_map((now,), |row| row.get::<usize, Uuid>(0)) {
                     // iterate over all old events
@@ -587,4 +647,59 @@ async fn post_rsvp(
 
     headers.insert("HX-Refresh", "true".parse()?);
     Ok((headers, StatusCode::OK))
+}
+
+async fn put_rsvp(
+    State(route_state): State<RouteState>,
+    Form(rsvp_payload): Form<UpdateRsvpForm>,
+) -> Result<(HeaderMap, StatusCode), AppError> {
+    let mut headers = HeaderMap::new();
+    let guest_uuid = Uuid::parse_str(&rsvp_payload.guest_id)?;
+    let db_conn = route_state.db.lock().await;
+    let mut old_guest = Guest::load_from_guest_uuid(guest_uuid, &db_conn)?;
+
+    if let Some(ref password_hash) = old_guest.password {
+        if bcrypt::verify(rsvp_payload.password, &password_hash)? {
+            let event_uuid = old_guest.get_event_uuid(&db_conn)?;
+            let link = format!("/event?uuid={}", event_uuid).parse()?;
+
+            old_guest.name = rsvp_payload.name;
+            old_guest.note = rsvp_payload.note;
+            old_guest.response = Response::try_from(rsvp_payload.response.as_str())?;
+            old_guest.commit_update(&db_conn)?;
+
+            headers.insert("HX-Redirect", link);
+            return Ok((headers, StatusCode::OK));
+        }
+    }
+
+    Ok((headers, StatusCode::FORBIDDEN))
+}
+
+async fn post_auth_guest(
+    State(route_state): State<RouteState>,
+    Form(auth_form): Form<GuestAuthForm>,
+) -> Result<(StatusCode, Html<String>), AppError> {
+    let db_conn = route_state.db.lock().await;
+    let guest = Guest::load_from_guest_uuid(Uuid::from_str(&auth_form.guest_id)?, &db_conn)?;
+    if let Some(ref password_hash) = guest.password {
+        if bcrypt::verify(auth_form.password, &password_hash)? {
+            // send edit guest form template
+            let content = GuestContent::from(&guest);
+            Ok((
+                StatusCode::OK,
+                Html(route_state.guest_edit_template.render(&content)),
+            ))
+        } else {
+            Ok((
+                StatusCode::BAD_REQUEST,
+                Html("<p class=\"error\">Incorrect password.</p>".to_owned()),
+            ))
+        }
+    } else {
+        Ok((
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error\">This guest did not set a password.</p>".to_owned()),
+        ))
+    }
 }

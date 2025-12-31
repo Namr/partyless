@@ -21,8 +21,12 @@
     </header>
 
     <main>
+      <form id="password-form" style="display: none;">
+        <input type="hidden" name="password" id="stored-password-field" />
+      </form>
+
       <div class="card auth-card" id="auth-card">
-        <form id="auth-form" hx-post="/auth_guest" hx-target="#auth-card" hx-swap="outerHTML">
+        <form id="auth-form" hx-post="/auth_guest" hx-target="#auth-card" hx-swap="innerHTML">
           <h2 class="auth-title">Edit Your RSVP</h2>
           <input type="hidden" name="guest_id" id="guest-id-field" />
           <div class="group">
@@ -48,6 +52,17 @@
     document.body.addEventListener("htmx:responseError", function(evt) {
       let target = document.querySelector("#error-modal-container");
       htmx.swap(target, evt.detail.xhr.responseText, "innerHTML");
+    });
+
+    // Capture password before auth form is submitted
+    document.body.addEventListener("htmx:configRequest", function(evt) {
+      if (evt.detail.path === '/auth_guest') {
+        const passwordField = document.getElementById('password');
+        const storedPasswordField = document.getElementById('stored-password-field');
+        if (passwordField && storedPasswordField) {
+          storedPasswordField.value = passwordField.value;
+        }
+      }
     });
 
     (function () {
