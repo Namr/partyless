@@ -82,7 +82,7 @@ pub async fn get_event(
 
     if let Ok(event) = maybe_event {
         let guests = Guest::load_from_event_uuid(uuid, &db_conn)
-            .context("failed to load guests from event uuid")?;
+            .context("Failed to load guests from event UUID.")?;
         let content = EventViewContent::new(&event, &guests);
         Ok((
             StatusCode::OK,
@@ -113,12 +113,18 @@ pub async fn post_event(
     Form(event_payload): Form<EventCreationForm>,
 ) -> Result<(HeaderMap, StatusCode), AppError> {
     let mut headers = HeaderMap::new();
-    let event = Event::from_event_creation_form(event_payload, &route_state.config)?;
-    debug!("got event {event:?}");
+    let event = Event::from_event_creation_form(event_payload, &route_state.config)
+        .with_context(|| "Failed to create event from form.")?;
     {
         let db_conn = route_state.db.lock().await;
-        event.commit(&db_conn)?;
+        event
+            .commit(&db_conn)
+            .with_context(|| "Failed to write event to the database.")?;
     }
+    info!(
+        "event {} created! Has UUID {}",
+        event.event_name, event.uuid
+    );
     let link = format!("/event?uuid={}", event.uuid).parse()?;
     headers.insert("HX-Redirect", link);
     Ok((headers, StatusCode::OK))
@@ -153,7 +159,7 @@ pub async fn put_event(
         &event_payload.time,
         &event_payload.timezone,
     )
-    .with_context(|| "Failed to pars time data")?;
+    .with_context(|| "Failed to parse time data.")?;
     old_event.event_name = event_payload.event_name;
     old_event.host_name = event_payload.hosts_name;
     old_event.address = event_payload.address;
@@ -161,14 +167,15 @@ pub async fn put_event(
     old_event.time = new_time;
 
     if let Some(ref password_hash) = old_event.password
-        && bcrypt::verify(event_payload.password, password_hash)? {
-            old_event
-                .commit_update(&db_conn)
-                .with_context(|| "Failed to update event in database")?;
-            let link = format!("/event?uuid={}", event_uuid).parse()?;
-            headers.insert("HX-Redirect", link);
-            return Ok((headers, StatusCode::OK));
-        }
+        && bcrypt::verify(event_payload.password, password_hash)?
+    {
+        old_event
+            .commit_update(&db_conn)
+            .with_context(|| "Failed to update event in database")?;
+        let link = format!("/event?uuid={}", event_uuid).parse()?;
+        headers.insert("HX-Redirect", link);
+        return Ok((headers, StatusCode::OK));
+    }
 
     Ok((headers, StatusCode::FORBIDDEN))
 }
@@ -191,15 +198,17 @@ pub async fn delete_event(
         .with_context(|| "Failed to load event from UUID.")?;
 
     if let Some(ref password_hash) = old_event.password
-        && bcrypt::verify(event_payload.password, password_hash)? {
-            let link = "/index.html".parse()?;
-            headers.insert("HX-Redirect", link);
+        && bcrypt::verify(event_payload.password, password_hash)
+            .with_context(|| "Failed password verification for event deletion.")?
+    {
+        let link = "/index.html".parse()?;
+        headers.insert("HX-Redirect", link);
 
-            old_event
-                .commit_delete(&db_conn)
-                .with_context(|| "Failed to delete event in database")?;
-            return Ok((headers, StatusCode::OK));
-        }
+        old_event
+            .commit_delete(&db_conn)
+            .with_context(|| "Failed to delete event in database")?;
+        return Ok((headers, StatusCode::OK));
+    }
 
     Ok((headers, StatusCode::FORBIDDEN))
 }
@@ -219,11 +228,14 @@ pub async fn post_rsvp(
 ) -> Result<(HeaderMap, StatusCode), AppError> {
     let mut headers = HeaderMap::new();
     let event_uuid = Uuid::parse_str(&rsvp_payload.uuid)?;
-    let guest = Guest::from_rsvp_form(rsvp_payload, &route_state.config)?;
+    let guest = Guest::from_rsvp_form(rsvp_payload, &route_state.config)
+        .with_context(|| "Failed to create guest from form.")?;
     info!("event_uuid: {} guest {:?}", event_uuid, guest);
 
     let db_conn = route_state.db.lock().await;
-    guest.commit(&db_conn, &event_uuid)?;
+    guest
+        .commit(&db_conn, &event_uuid)
+        .with_context(|| "Failed to write guest to the database.")?;
 
     headers.insert("HX-Refresh", "true".parse()?);
     Ok((headers, StatusCode::OK))
@@ -243,23 +255,30 @@ pub async fn put_rsvp(
     Form(rsvp_payload): Form<UpdateRsvpForm>,
 ) -> Result<(HeaderMap, StatusCode), AppError> {
     let mut headers = HeaderMap::new();
-    let guest_uuid = Uuid::parse_str(&rsvp_payload.guest_id)?;
+    let guest_uuid =
+        Uuid::parse_str(&rsvp_payload.guest_id).with_context(|| "Failed to parse guest UUID.")?;
     let db_conn = route_state.db.lock().await;
-    let mut old_guest = Guest::load_from_guest_uuid(guest_uuid, &db_conn)?;
+    let mut old_guest = Guest::load_from_guest_uuid(guest_uuid, &db_conn)
+        .with_context(|| "Failed to load guest from UUID.")?;
 
     if let Some(ref password_hash) = old_guest.password
-        && bcrypt::verify(rsvp_payload.password, password_hash)? {
-            let event_uuid = old_guest.get_event_uuid(&db_conn)?;
-            let link = format!("/event?uuid={}", event_uuid).parse()?;
+        && bcrypt::verify(rsvp_payload.password, password_hash)
+            .with_context(|| "Failed password verification for guest registration.")?
+    {
+        let event_uuid = old_guest
+            .get_event_uuid(&db_conn)
+            .with_context(|| "Failed to get event uuid for guest.")?;
+        let link = format!("/event?uuid={}", event_uuid).parse()?;
 
-            old_guest.name = rsvp_payload.name;
-            old_guest.note = rsvp_payload.note;
-            old_guest.response = Response::try_from(rsvp_payload.response.as_str())?;
-            old_guest.commit_update(&db_conn)?;
+        old_guest.name = rsvp_payload.name;
+        old_guest.note = rsvp_payload.note;
+        old_guest.response = Response::try_from(rsvp_payload.response.as_str())
+            .with_context(|| "Failed to parse response field from payload.")?;
+        old_guest.commit_update(&db_conn)?;
 
-            headers.insert("HX-Redirect", link);
-            return Ok((headers, StatusCode::OK));
-        }
+        headers.insert("HX-Redirect", link);
+        return Ok((headers, StatusCode::OK));
+    }
 
     Ok((headers, StatusCode::FORBIDDEN))
 }
@@ -280,16 +299,20 @@ pub async fn delete_rsvp(
     let old_guest = Guest::load_from_guest_uuid(guest_uuid, &db_conn)?;
 
     if let Some(ref password_hash) = old_guest.password
-        && bcrypt::verify(rsvp_payload.password, password_hash)? {
-            let event_uuid = old_guest.get_event_uuid(&db_conn)?;
-            let link = format!("/event?uuid={}", event_uuid).parse()?;
-            headers.insert("HX-Redirect", link);
+        && bcrypt::verify(rsvp_payload.password, password_hash)
+            .with_context(|| "Failed password verification for rsvp deletion.")?
+    {
+        let event_uuid = old_guest
+            .get_event_uuid(&db_conn)
+            .with_context(|| "Failed to get event UUID for guest.")?;
+        let link = format!("/event?uuid={}", event_uuid).parse()?;
+        headers.insert("HX-Redirect", link);
 
-            old_guest
-                .commit_delete(&db_conn)
-                .with_context(|| "Failed to delete guest from database.")?;
-            return Ok((headers, StatusCode::OK));
-        }
+        old_guest
+            .commit_delete(&db_conn)
+            .with_context(|| "Failed to delete guest from database.")?;
+        return Ok((headers, StatusCode::OK));
+    }
 
     Ok((headers, StatusCode::FORBIDDEN))
 }
@@ -305,9 +328,15 @@ pub async fn post_auth_guest(
     Form(auth_form): Form<AuthForm>,
 ) -> Result<(StatusCode, Html<String>), AppError> {
     let db_conn = route_state.db.lock().await;
-    let guest = Guest::load_from_guest_uuid(Uuid::from_str(&auth_form.uuid)?, &db_conn)?;
+    let guest = Guest::load_from_guest_uuid(
+        Uuid::from_str(&auth_form.uuid).with_context(|| "Failed to parse UUID.")?,
+        &db_conn,
+    )
+    .with_context(|| "Failed to load guest from UUID")?;
     if let Some(ref password_hash) = guest.password {
-        if bcrypt::verify(auth_form.password, password_hash)? {
+        if bcrypt::verify(auth_form.password, password_hash)
+            .with_context(|| "Failed to verify password for guest authentication.")?
+        {
             // send edit guest form template
             let content = GuestContent::from(&guest);
             Ok((
@@ -334,13 +363,13 @@ pub async fn post_auth_event(
 ) -> Result<(StatusCode, Html<String>), AppError> {
     let db_conn = route_state.db.lock().await;
     let event = Event::load_from_uuid(
-        Uuid::from_str(&auth_form.uuid).with_context(|| "Failed to parse UUID")?,
+        Uuid::from_str(&auth_form.uuid).with_context(|| "Failed to parse UUID.")?,
         &db_conn,
     )
-    .with_context(|| "Failed to load event from UUID")?;
+    .with_context(|| "Failed to load event from UUID.")?;
     if let Some(ref password_hash) = event.password {
         if bcrypt::verify(auth_form.password, password_hash)
-            .with_context(|| "Failed to validate password")?
+            .with_context(|| "Failed to validate password for event authentication.")?
         {
             // send edit guest form template
             let content = EventViewContent::new(&event, &[]);
