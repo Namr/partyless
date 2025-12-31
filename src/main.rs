@@ -15,7 +15,7 @@ use ramhorns::{Content, Template};
 use rusqlite::{Connection, Row, ToSql, types::FromSql};
 use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, signal, sync::Mutex};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info};
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
@@ -527,7 +527,7 @@ async fn main() -> Result<()> {
     init_db_schema(&mut route_state).await?;
 
     let app = Router::new()
-        .fallback_service(ServeDir::new(args.static_pages))
+        .fallback_service(ServeDir::new(args.static_pages).fallback(ServeFile::new("static/404.html")))
         .route("/event", get(get_event).post(post_event).put(put_event))
         .route("/rsvp", post(post_rsvp).put(put_rsvp))
         // (note: amoussa) these are POSTs because otherwise
@@ -538,7 +538,7 @@ async fn main() -> Result<()> {
         .route("/auth_event", post(post_auth_event))
         .layer(TraceLayer::new_for_http())
         .with_state(route_state);
-
+    
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
     info!("server started on {}", listener.local_addr()?);
 
@@ -676,21 +676,22 @@ async fn get_event(
     Query(params): Query<EventViewQuery>,
 ) -> Result<(StatusCode, Html<String>), AppError> {
     let uuid = Uuid::parse_str(&params.uuid)?;
-    let (event, guests) = {
-        let db_conn = route_state.db.lock().await;
-        (
-            Event::load_from_uuid(uuid, &db_conn).context("failed to load event from uuid")?,
-            Guest::load_from_event_uuid(uuid, &db_conn)
-                .context("failed to load guests from event uuid")?,
-        )
-    };
+    let db_conn = route_state.db.lock().await;
+    let maybe_event = Event::load_from_uuid(uuid, &db_conn);
 
-    debug!("got event {event:?}");
-    let content = EventViewContent::new(&event, &guests);
-    Ok((
-        StatusCode::OK,
-        Html(route_state.event_template.render(&content)),
-    ))
+    if let Ok(event) = maybe_event {
+        let guests = Guest::load_from_event_uuid(uuid, &db_conn).context("failed to load guests from event uuid")?;
+        let content = EventViewContent::new(&event, &guests);
+        Ok((
+            StatusCode::OK,
+            Html(route_state.event_template.render(&content)),
+        ))
+    } else {
+        Ok((
+            StatusCode::NOT_FOUND,
+            Html(include_str!("../static/404.html").to_string()),
+        ))
+    }
 }
 
 async fn post_event(
