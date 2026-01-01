@@ -55,7 +55,7 @@ Transfer this file to your host server. and load it with the following command:
 podman load -i partyless_server_0.0.1.oci.tar
 ```
 
-Its recommended to use a systemd service to run the server, make a systemd service file at `podman load -i partyless_server_0.0.1.oci.tar`.
+Its recommended to use a systemd service to run the server, make a systemd service file at `/etc/systemd/system/partyless.service`.
 An example service file can be found below:
 ```
 [Unit]
