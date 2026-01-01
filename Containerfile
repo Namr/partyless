@@ -20,6 +20,7 @@ RUN apt update && apt install libsqlite3-dev -y
 WORKDIR /app
 
 COPY --from=builder /app/target/release/partyless /usr/local/bin/partyless
+COPY static ./static
 COPY templates/ ./templates
 
 ENV RUST_LOG=info
