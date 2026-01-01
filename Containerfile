@@ -11,6 +11,7 @@ RUN mkdir src && echo "// dummy file for cargo fetch" > src/main.rs
 RUN cargo fetch
 
 COPY src ./src
+COPY static ./static
 RUN cargo build --release
 
 # run app
@@ -19,10 +20,8 @@ RUN apt update && apt install libsqlite3-dev -y
 WORKDIR /app
 
 COPY --from=builder /app/target/release/partyless /usr/local/bin/partyless
-COPY Config.toml ./
 COPY templates/ ./templates
-COPY static/ ./static
 
 ENV RUST_LOG=info
 EXPOSE 3000
-ENTRYPOINT ["/usr/local/bin/partyless", "--db-file=./data/partyless.db"]
+ENTRYPOINT ["/usr/local/bin/partyless", "--db-file=./data/partyless.db", "--metrics-db-file=./data/partyless_metrics.db"]

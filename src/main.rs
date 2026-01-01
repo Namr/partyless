@@ -20,7 +20,6 @@ use chrono::Utc;
 use clap::Parser;
 use ramhorns::{Content, Template};
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -30,14 +29,11 @@ use uuid::Uuid;
 
 const CLEANUP_PERIOD: Duration = Duration::from_secs(5 * 60 * 60);
 const CLEANUP_THRESHOLD: Duration = Duration::from_secs(24 * 60 * 60);
+const BCRYPT_COST: u32 = 12;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Path to Configuration TOML file
-    #[arg(short, long, default_value = "Config.toml")]
-    config_file: String,
-
     /// Path to user data SQLite DB file
     #[arg(short, long, default_value = "partyless.db")]
     db_file: String,
@@ -55,15 +51,8 @@ struct Args {
     templates: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Config {
-    bcrypt_cost: u32,
-    bcrypt_salt: [u8; 16],
-}
-
 #[derive(Clone)]
 struct RouteState {
-    config: Config,
     db: Arc<Mutex<Connection>>,
     metrics: Arc<Mutex<MetricsConnection>>,
     event_template: Arc<Template<'static>>,
@@ -106,11 +95,6 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let config: Config = toml::from_str(
-        &read_to_string(args.config_file)
-            .with_context(|| "Couldn't find configuration TOML file")?,
-    )?;
-
     let db = Arc::new(Mutex::new(Connection::open(args.db_file)?));
     let metrics = Arc::new(Mutex::new(
         init_metrics(&args.metrics_db_file).with_context(|| "Failed to init metrics.")?,
@@ -141,7 +125,6 @@ async fn main() -> Result<()> {
 
     tokio::spawn(clean_database(db.clone()));
     let mut route_state = RouteState {
-        config,
         db,
         event_template,
         guest_edit_template,

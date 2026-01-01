@@ -115,8 +115,8 @@ pub async fn post_event(
     Form(event_payload): Form<EventCreationForm>,
 ) -> Result<(HeaderMap, StatusCode), AppError> {
     let mut headers = HeaderMap::new();
-    let event = Event::from_event_creation_form(event_payload, &route_state.config)
-        .with_context(|| "Failed to create event from form.")?;
+    let event =
+        Event::try_from(event_payload).with_context(|| "Failed to create event from form.")?;
     {
         let db_conn = route_state.db.lock().await;
         event
@@ -264,8 +264,8 @@ pub async fn post_rsvp(
 ) -> Result<(HeaderMap, StatusCode), AppError> {
     let mut headers = HeaderMap::new();
     let event_uuid = Uuid::parse_str(&rsvp_payload.uuid)?;
-    let guest = Guest::from_rsvp_form(rsvp_payload, &route_state.config)
-        .with_context(|| "Failed to create guest from form.")?;
+    let guest =
+        Guest::try_from(rsvp_payload).with_context(|| "Failed to create guest from form.")?;
     info!("Created RSVP for guest {}", guest.name);
 
     let db_conn = route_state.db.lock().await;

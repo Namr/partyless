@@ -7,7 +7,7 @@ use rusqlite::{Connection, Row, ToSql, types::FromSql};
 use uuid::Uuid;
 
 use crate::{
-    Config,
+    BCRYPT_COST,
     routes::{EventCreationForm, RsvpForm},
 };
 
@@ -38,15 +38,12 @@ pub enum Response {
     Maybe,
 }
 
-fn hash_password(maybe_password: Option<String>, config: &Config) -> Result<Option<String>> {
+fn hash_password(maybe_password: Option<String>) -> Result<Option<String>> {
     if let Some(password) = maybe_password {
         if password.len() >= 72 || password.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(
-                bcrypt::hash_with_salt(password, config.bcrypt_cost, config.bcrypt_salt)?
-                    .format_for_version(bcrypt::Version::TwoB),
-            ))
+            Ok(Some(bcrypt::hash(password, BCRYPT_COST)?))
         }
     } else {
         Ok(None)
@@ -108,9 +105,11 @@ impl TryFrom<&str> for Response {
     }
 }
 
-impl Guest {
-    pub fn from_rsvp_form(value: RsvpForm, config: &Config) -> Result<Self> {
-        let password = hash_password(value.password, config)?;
+impl TryFrom<RsvpForm> for Guest {
+    type Error = anyhow::Error;
+
+    fn try_from(value: RsvpForm) -> Result<Self> {
+        let password = hash_password(value.password)?;
         let response = Response::try_from(value.response.as_str())?;
         Ok(Guest {
             uuid: Uuid::new_v4(),
@@ -120,7 +119,9 @@ impl Guest {
             response,
         })
     }
+}
 
+impl Guest {
     pub fn from_sql(row: &Row<'_>) -> rusqlite::Result<Self> {
         let password = row.get::<&str, String>("password").ok();
         Ok(Guest {
@@ -205,8 +206,9 @@ impl Guest {
     }
 }
 
-impl Event {
-    pub fn from_event_creation_form(value: EventCreationForm, config: &Config) -> Result<Self> {
+impl TryFrom<EventCreationForm> for Event {
+    type Error = anyhow::Error;
+    fn try_from(value: EventCreationForm) -> Result<Self> {
         if value.event_name.is_empty()
             || value.hosts_name.is_empty()
             || value.address.is_empty()
@@ -218,7 +220,7 @@ impl Event {
         }
 
         let time = parse_time_data(&value.date, &value.time, &value.timezone)?;
-        let password = hash_password(value.password, config)?;
+        let password = hash_password(value.password)?;
         Ok(Event {
             uuid: Uuid::new_v4(),
             event_name: value.event_name,
@@ -229,7 +231,8 @@ impl Event {
             time,
         })
     }
-
+}
+impl Event {
     pub fn commit(&self, conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare_cached(
             "INSERT into events (
