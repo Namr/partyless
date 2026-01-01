@@ -1,5 +1,6 @@
 use super::data::*;
 use super::*;
+
 use anyhow::{Context, Result};
 use axum::{
     Form,
@@ -7,8 +8,9 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Html,
 };
+use metrics::{Metric, increment_metric};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::info;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Content)]
@@ -125,6 +127,12 @@ pub async fn post_event(
         "event {} created! Has UUID {}",
         event.event_name, event.uuid
     );
+
+    {
+        let metrics = route_state.metrics.lock().await;
+        increment_metric(Metric::EventAdded, &metrics)?;
+    }
+
     let link = format!("/event?uuid={}", event.uuid).parse()?;
     headers.insert("HX-Redirect", link);
     Ok((headers, StatusCode::OK))
@@ -169,14 +177,29 @@ pub async fn put_event(
     if let Some(ref password_hash) = old_event.password
         && bcrypt::verify(event_payload.password, password_hash)?
     {
+        info!("Updating event {}", old_event.event_name);
         old_event
             .commit_update(&db_conn)
             .with_context(|| "Failed to update event in database")?;
         let link = format!("/event?uuid={}", event_uuid).parse()?;
+
+        {
+            let metrics = route_state.metrics.lock().await;
+            increment_metric(Metric::EventChanged, &metrics)?;
+        }
+
         headers.insert("HX-Redirect", link);
         return Ok((headers, StatusCode::OK));
     }
 
+    info!(
+        "Failed to update event {}; Wrong password.",
+        old_event.event_name
+    );
+    {
+        let metrics = route_state.metrics.lock().await;
+        increment_metric(Metric::EventLoginFailed, &metrics)?;
+    }
     Ok((headers, StatusCode::FORBIDDEN))
 }
 
@@ -203,13 +226,26 @@ pub async fn delete_event(
     {
         let link = "/index.html".parse()?;
         headers.insert("HX-Redirect", link);
+        info!("Deleting event {}", old_event.event_name);
 
         old_event
             .commit_delete(&db_conn)
             .with_context(|| "Failed to delete event in database")?;
+        {
+            let metrics = route_state.metrics.lock().await;
+            increment_metric(Metric::EventDeleted, &metrics)?;
+        }
         return Ok((headers, StatusCode::OK));
     }
 
+    info!(
+        "Failed to delete event {}; Wrong password",
+        old_event.event_name
+    );
+    {
+        let metrics = route_state.metrics.lock().await;
+        increment_metric(Metric::EventLoginFailed, &metrics)?;
+    }
     Ok((headers, StatusCode::FORBIDDEN))
 }
 
@@ -230,13 +266,17 @@ pub async fn post_rsvp(
     let event_uuid = Uuid::parse_str(&rsvp_payload.uuid)?;
     let guest = Guest::from_rsvp_form(rsvp_payload, &route_state.config)
         .with_context(|| "Failed to create guest from form.")?;
-    info!("event_uuid: {} guest {:?}", event_uuid, guest);
+    info!("Created RSVP for guest {}", guest.name);
 
     let db_conn = route_state.db.lock().await;
     guest
         .commit(&db_conn, &event_uuid)
         .with_context(|| "Failed to write guest to the database.")?;
 
+    {
+        let metrics = route_state.metrics.lock().await;
+        increment_metric(Metric::RSVPAdded, &metrics)?;
+    }
     headers.insert("HX-Refresh", "true".parse()?);
     Ok((headers, StatusCode::OK))
 }
@@ -269,6 +309,7 @@ pub async fn put_rsvp(
             .get_event_uuid(&db_conn)
             .with_context(|| "Failed to get event uuid for guest.")?;
         let link = format!("/event?uuid={}", event_uuid).parse()?;
+        info!("Updated RSVP for guest {}", old_guest.name);
 
         old_guest.name = rsvp_payload.name;
         old_guest.note = rsvp_payload.note;
@@ -276,10 +317,22 @@ pub async fn put_rsvp(
             .with_context(|| "Failed to parse response field from payload.")?;
         old_guest.commit_update(&db_conn)?;
 
+        {
+            let metrics = route_state.metrics.lock().await;
+            increment_metric(Metric::RSVPChanged, &metrics)?;
+        }
         headers.insert("HX-Redirect", link);
         return Ok((headers, StatusCode::OK));
     }
 
+    info!(
+        "Failed to update RSVP for guest {}; Wrong password.",
+        old_guest.name
+    );
+    {
+        let metrics = route_state.metrics.lock().await;
+        increment_metric(Metric::RSVPLoginFailed, &metrics)?;
+    }
     Ok((headers, StatusCode::FORBIDDEN))
 }
 
@@ -302,6 +355,7 @@ pub async fn delete_rsvp(
         && bcrypt::verify(rsvp_payload.password, password_hash)
             .with_context(|| "Failed password verification for rsvp deletion.")?
     {
+        info!("Deleting RSVP for {}", old_guest.name);
         let event_uuid = old_guest
             .get_event_uuid(&db_conn)
             .with_context(|| "Failed to get event UUID for guest.")?;
@@ -311,9 +365,22 @@ pub async fn delete_rsvp(
         old_guest
             .commit_delete(&db_conn)
             .with_context(|| "Failed to delete guest from database.")?;
+
+        {
+            let metrics = route_state.metrics.lock().await;
+            increment_metric(Metric::RSVPDeleted, &metrics)?;
+        }
         return Ok((headers, StatusCode::OK));
     }
 
+    info!(
+        "Failed to delete RSVP for {}; Wrong password.",
+        old_guest.name
+    );
+    {
+        let metrics = route_state.metrics.lock().await;
+        increment_metric(Metric::RSVPLoginFailed, &metrics)?;
+    }
     Ok((headers, StatusCode::FORBIDDEN))
 }
 
@@ -337,6 +404,7 @@ pub async fn post_auth_guest(
         if bcrypt::verify(auth_form.password, password_hash)
             .with_context(|| "Failed to verify password for guest authentication.")?
         {
+            info!("Authorized guest {}", guest.name);
             // send edit guest form template
             let content = GuestContent::from(&guest);
             Ok((
@@ -344,12 +412,25 @@ pub async fn post_auth_guest(
                 Html(route_state.guest_edit_template.render(&content)),
             ))
         } else {
+            info!("Guest {} failed to authorize", guest.name);
+            {
+                let metrics = route_state.metrics.lock().await;
+                increment_metric(Metric::RSVPLoginFailed, &metrics)?;
+            }
             Ok((
                 StatusCode::BAD_REQUEST,
                 Html("<p class=\"error\">Incorrect password.</p>".to_owned()),
             ))
         }
     } else {
+        {
+            let metrics = route_state.metrics.lock().await;
+            increment_metric(Metric::RSVPLoginFailed, &metrics)?;
+        }
+        info!(
+            "Guest {} failed to authorize due to a lack of password",
+            guest.name
+        );
         Ok((
             StatusCode::NOT_FOUND,
             Html("<p class=\"error\">This guest did not set a password.</p>".to_owned()),
@@ -372,18 +453,32 @@ pub async fn post_auth_event(
             .with_context(|| "Failed to validate password for event authentication.")?
         {
             // send edit guest form template
+            info!("Event {} authorized", event.event_name);
             let content = EventViewContent::new(&event, &[]);
             Ok((
                 StatusCode::OK,
                 Html(route_state.event_edit_template.render(&content)),
             ))
         } else {
+            info!("Event {} failed authorization", event.event_name);
+            {
+                let metrics = route_state.metrics.lock().await;
+                increment_metric(Metric::EventLoginFailed, &metrics)?;
+            }
             Ok((
                 StatusCode::BAD_REQUEST,
                 Html("<p class=\"error\">Incorrect password.</p>".to_owned()),
             ))
         }
     } else {
+        info!(
+            "User tried to authorize event {} which has no password",
+            event.event_name
+        );
+        {
+            let metrics = route_state.metrics.lock().await;
+            increment_metric(Metric::EventLoginFailed, &metrics)?;
+        }
         Ok((
             StatusCode::NOT_FOUND,
             Html("<p class=\"error\">This guest did not set a password.</p>".to_owned()),

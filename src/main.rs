@@ -1,7 +1,11 @@
 mod data;
+mod metrics;
 mod routes;
 
-use crate::routes::*;
+use crate::{
+    metrics::{MetricsConnection, init_metrics},
+    routes::*,
+};
 
 use std::{fs::read_to_string, str::FromStr, sync::Arc, time::Duration};
 
@@ -34,9 +38,13 @@ struct Args {
     #[arg(short, long, default_value = "Config.toml")]
     config_file: String,
 
-    /// Path to SQLite DB file
+    /// Path to user data SQLite DB file
     #[arg(short, long, default_value = "partyless.db")]
     db_file: String,
+
+    /// Path to metrics SQLite DB file
+    #[arg(short, long, default_value = "partyless_metrics.db")]
+    metrics_db_file: String,
 
     /// Path to SQLite DB file
     #[arg(long, default_value = "static")]
@@ -57,6 +65,7 @@ struct Config {
 struct RouteState {
     config: Config,
     db: Arc<Mutex<Connection>>,
+    metrics: Arc<Mutex<MetricsConnection>>,
     event_template: Arc<Template<'static>>,
     guest_edit_template: Arc<Template<'static>>,
     event_edit_template: Arc<Template<'static>>,
@@ -103,6 +112,9 @@ async fn main() -> Result<()> {
     )?;
 
     let db = Arc::new(Mutex::new(Connection::open(args.db_file)?));
+    let metrics = Arc::new(Mutex::new(
+        init_metrics(&args.metrics_db_file).with_context(|| "Failed to init metrics.")?,
+    ));
 
     // templates
     let event_template = Arc::new(
@@ -134,6 +146,7 @@ async fn main() -> Result<()> {
         event_template,
         guest_edit_template,
         event_edit_template,
+        metrics,
     };
 
     init_db_schema(&mut route_state).await?;

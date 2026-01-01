@@ -1,4 +1,4 @@
 /target
 flow.txt
-partyless.db
+*.db
 *.tar

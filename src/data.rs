@@ -134,7 +134,7 @@ impl Guest {
 
     pub fn commit(&self, conn: &Connection, event_uuid: &Uuid) -> Result<()> {
         let mut stmt = conn.prepare_cached(
-            "INSERT into guests(
+            "INSERT INTO guests(
                 uuid,
                 event_uuid, 
                 name, 
